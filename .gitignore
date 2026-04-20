@@ -1,0 +1,9 @@
+# Ignorar el entorno virtual de Python
+.venv/
+
+# Ignorar las carpetas de datos (pesan mucho para GitHub)
+Inputs/
+Outputs/
+
+# Ignorar archivos temporales de Jupyter
+.ipynb_checkpoints/
