@@ -1,7 +1,7 @@
 # Ignorar el entorno virtual de Python
 .venv/
 
-# Ignorar las carpetas de datos (pesan mucho para GitHub)
+# Ignorar las carpetas de datos (pesan mucho)
 Inputs/
 Outputs/
 
