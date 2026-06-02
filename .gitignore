@@ -1,10 +1,53 @@
-# Ignorar el entorno virtual de Python
+# ==============================================================================
+# GPS Emissions Pipeline - Production GitIgnore
+# ==============================================================================
+
+# 1. Environment & Packages
 .venv/
+venv/
+ENV/
+env/
+dist/
+build/
+*.egg-info/
+.env
 
-# Ignorar las carpetas de datos (pesan mucho)
-Inputs/
-Outputs/
-Respaldos temporales/
-
-# Ignorar archivos temporales de Jupyter
+# 2. Python Artifacts & Caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
 .ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# 3. Project Specific Data (Large Datasets & Outputs)
+# Exclude raw input files, reference infrastructure data, and compiled graphs
+Inputs/
+# Exclude final processed parquet and Kepler visualization CSVs
+Outputs/
+# Exclude temporary test directories, logs and backups
+Respaldos temporales/
+Temporary outputs/
+scratch/
+
+# Global data patterns to prevent accidental leakage of large tables/graphs
+*.parquet
+*.csv
+*.geojson
+*.pkl
+*.pickle
+*.log
+
+# 4. Local IDE Configuration
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# 5. CLI & System Metadata
+.antigravitycli/
+.DS_Store
+Thumbs.db
