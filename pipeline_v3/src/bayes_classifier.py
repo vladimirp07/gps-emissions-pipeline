@@ -14,7 +14,7 @@ def calcular_cercania_infraestructura(df, subway_routes, bus_routes):
     gdf_pts = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.longitude, df.latitude), crs="EPSG:4326")
     gdf_pts = gdf_pts.to_crs("EPSG:32614")
     
-    RADIO_BUSQUEDA_METROS = 150
+    RADIO_BUSQUEDA_METROS = 50
     
     # 2. Búsqueda Espacial Exacta (sjoin_nearest mide a la LÍNEA, no al centroide)
     # --- METRO ---
@@ -35,7 +35,7 @@ class PriorModeClassifier:
     Calcula priors heurísticos y realiza el descarte/poda de hipótesis imposibles
     utilizando variables baratas derivadas directamente del GPS crudo (sin ruteo).
     """
-    def __init__(self, max_walk_speed=25.0, max_walk_dist=12.0):
+    def __init__(self, max_walk_speed=20.0, max_walk_dist=12.0):
         self.max_walk_speed = max_walk_speed
         self.max_walk_dist = max_walk_dist
 
@@ -125,6 +125,30 @@ class BayesianRouteEvaluator:
     def __init__(self):
         self.modos = ['Carro', 'Bus', 'Metro', 'Caminar']
         
+        # Intentar cargar cachés precomputadas de infraestructura para optimización espacial
+        import pickle
+        from pathlib import Path
+        
+        current_dir = Path(__file__).resolve().parent
+        project_root = current_dir.parents[1]  # pipeline_v3/src/ -> dos niveles arriba
+        cache_dir = project_root / "Inputs" / "Infrastructure" / "Cache_Optimizado"
+        
+        cache_file_drive = cache_dir / "drive_infra_cache.pkl"
+        cache_file_walk = cache_dir / "walk_infra_cache.pkl"
+        
+        if cache_file_drive.exists() and cache_file_walk.exists():
+            try:
+                with open(cache_file_drive, 'rb') as f:
+                    self.drive_infra_cache = pickle.load(f)
+                with open(cache_file_walk, 'rb') as f:
+                    self.walk_infra_cache = pickle.load(f)
+            except Exception:
+                self.drive_infra_cache = None
+                self.walk_infra_cache = None
+        else:
+            self.drive_infra_cache = None
+            self.walk_infra_cache = None
+        
         # Matrices de Probabilidad Condicional originales del artículo de investigación
         self.Cercania = np.array([
             [0.10, 0.10, 0.80, 0.00],  # Cerca de estación de metro (índice 0)
@@ -161,8 +185,29 @@ class BayesianRouteEvaluator:
             return pd.Series([0.0, 0.0, 0.0, 0.0], index=self.modos)
 
         df_eval = df_routed.copy()
-        # Calculamos proximidad en base a la línea ruteada físicamente
-        df_eval = calcular_cercania_infraestructura(df_eval, subway_routes, bus_routes)
+        
+        # Intentar usar el caché precalculado si está cargado y el ruteo contiene nodos válidos
+        if self.drive_infra_cache is not None and self.walk_infra_cache is not None:
+            is_walk = (str(mode_hypothesis).lower() == 'caminar')
+            cache = self.walk_infra_cache if is_walk else self.drive_infra_cache
+            
+            near_subway_list = []
+            near_bus_list = []
+            
+            if 'start_node' not in df_eval.columns or 'end_node' not in df_eval.columns or (df_eval['start_node'] == 'N/A').all():
+                df_eval = calcular_cercania_infraestructura(df_eval, subway_routes, bus_routes)
+            else:
+                for u, v in zip(df_eval['start_node'], df_eval['end_node']):
+                    res = cache.get((u, v))
+                    if res is None:
+                        res = cache.get((v, u), (0, 0))
+                    near_subway_list.append(res[0])
+                    near_bus_list.append(res[1])
+                df_eval['near_subway_line'] = near_subway_list
+                df_eval['near_bus_route'] = near_bus_list
+        else:
+            # Fallback a sjoin_nearest en runtime si no hay caché
+            df_eval = calcular_cercania_infraestructura(df_eval, subway_routes, bus_routes)
 
         # 1. Índice de Cercanía: 0 (Metro), 1 (Bus), 2 (Ninguno)
         idx_c = np.where(df_eval['near_subway_line'] == 1, 0,
@@ -208,10 +253,28 @@ class BayesianRouteEvaluator:
         2. Patrón de paradas de bus / velocidad promedio de ruteo.
         3. Matrices de probabilidad bayesianas evaluadas sobre la ruta motorizada.
         """
-        # Calcular proximidad en base a la línea ruteada físicamente primero
         df_eval = df_routed.copy()
-        df_eval = calcular_cercania_infraestructura(df_eval, subway_routes, bus_routes)
         
+        # Intentar usar el caché precalculado si está cargado y el ruteo contiene nodos válidos
+        if self.drive_infra_cache is not None:
+            cache = self.drive_infra_cache
+            near_subway_list = []
+            near_bus_list = []
+            
+            if 'start_node' not in df_eval.columns or 'end_node' not in df_eval.columns or (df_eval['start_node'] == 'N/A').all():
+                df_eval = calcular_cercania_infraestructura(df_eval, subway_routes, bus_routes)
+            else:
+                for u, v in zip(df_eval['start_node'], df_eval['end_node']):
+                    res = cache.get((u, v))
+                    if res is None:
+                        res = cache.get((v, u), (0, 0))
+                    near_subway_list.append(res[0])
+                    near_bus_list.append(res[1])
+                df_eval['near_subway_line'] = near_subway_list
+                df_eval['near_bus_route'] = near_bus_list
+        else:
+            df_eval = calcular_cercania_infraestructura(df_eval, subway_routes, bus_routes)
+            
         prob_vector_road = self.evaluate_completed_route_with_matrices(df_eval, 'Carro', subway_routes, bus_routes)
         
         # Detección heurística de paradas/patrón de velocidad baja recurrente

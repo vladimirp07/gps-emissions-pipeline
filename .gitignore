@@ -29,6 +29,8 @@ Outputs/
 Respaldos temporales/
 Temporary outputs/
 scratch/
+Documentacion_Local/
+legacy/
 
 # Global data patterns to prevent accidental leakage of large tables/graphs
 *.parquet
@@ -51,3 +53,6 @@ scratch/
 .antigravitycli/
 .DS_Store
 Thumbs.db
+
+# 6. Local Visual Content & Presentation Generation
+visual_content/

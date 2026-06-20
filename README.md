@@ -17,7 +17,7 @@ Raw GPS
 ## Repository Structure
 
 ```
-├── pipeline_v2/
+├── pipeline_v3/
 │   ├── orchestrator.ipynb   # Main Jupyter notebook executing the modular workflow
 │   └── src/                 # Modular Python source code
 │       ├── config.py        # Relative path and filesystem configurations
@@ -49,10 +49,10 @@ Ensure that NetworkX and iGraph cache files are pre-built and stored in `Inputs/
 
 To execute the pipeline:
 1. Ensure the virtual environment is active and dependencies are installed.
-2. Verify that input datasets and network graphs are located in the `Inputs/` folder as configured in `pipeline_v2/src/config.py`.
+2. Verify that input datasets and network graphs are located in the `Inputs/` folder as configured in `pipeline_v3/src/config.py`.
 3. Open the main notebook:
    ```bash
-   jupyter notebook pipeline_v2/orchestrator.ipynb
+   jupyter notebook pipeline_v3/orchestrator.ipynb
    ```
 4. Run all cells in the notebook. Autoreload is enabled by default to capture any updates made to the helper modules in the `src/` directory.
 
