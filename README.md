@@ -65,5 +65,5 @@ The pipeline generates two main files in `Outputs/Final Outputs/`:
 ## Notes
 
 * **Timezone Assumptions**: Raw timestamps are localized to `America/Monterrey` local time.
-* **Network Continuity**: Pedestrian networks (`G_walk`) can have localized topological disconnections. Gaps are skipped dynamically via lookahead steps, which may result in localized routing failures.
+* **Network Continuity**: Pedestrian networks (`G_walk`) can have localized topological disconnections. Gaps can be skipped dynamically via lookahead steps, which may result in localized routing failures.
 * **Emissions Allocation**: Emissions for trips classified as `Bus` are prorated by a default occupancy factor of 25 to estimate passenger-level carbon footprint. Driving trips (`Carro`) calculate total vehicle-level emissions.
