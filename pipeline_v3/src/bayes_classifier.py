@@ -35,43 +35,10 @@ class PriorModeClassifier:
     Calcula priors heurísticos y realiza el descarte/poda de hipótesis imposibles
     utilizando variables baratas derivadas directamente del GPS crudo (sin ruteo).
     """
-    def __init__(self, max_walk_speed=20.0, max_walk_dist=12.0):
+    def __init__(self, max_walk_speed=22.0, max_walk_dist=15.0):
         self.max_walk_speed = max_walk_speed
         self.max_walk_dist = max_walk_dist
 
-    def generate_mode_priors(self, df_trip, near_subway, near_bus):
-        """
-        Calcula una distribución de probabilidad a priori simplificada para cada modo
-        (Caminar, Metro, Carro, Bus) basándose en estadísticas rápidas del GPS crudo.
-        
-        Este es el 'Prior' conceptual en nuestro flujo Bayesiano Coarse-to-Fine.
-        """
-        max_speed = df_trip['Speed [km/h]'].max()
-        total_dist_km = df_trip['dis lineal [m]'].sum() / 1000.0
-        
-        # Inicializar priors uniformes / base
-        priors = {'Caminar': 0.25, 'Metro': 0.25, 'Carro': 0.25, 'Bus': 0.25}
-        
-        # Ajustes heurísticos rápidos
-        if max_speed > self.max_walk_speed:
-            priors['Caminar'] = 0.0
-            
-        if not near_subway.any() or total_dist_km <= 1.0:
-            priors['Metro'] = 0.0
-            
-        if max_speed <= 3.0 and total_dist_km <= 0.5:
-            # Si casi no hay movimiento, disminuye probabilidad de motorizados
-            priors['Carro'] = 0.05
-            priors['Bus'] = 0.05
-            
-        # Normalizar vector
-        sum_priors = sum(priors.values())
-        if sum_priors > 0:
-            priors = {k: v / sum_priors for k, v in priors.items()}
-        else:
-            priors = {'Caminar': 0.0, 'Metro': 0.0, 'Carro': 0.5, 'Bus': 0.5}
-            
-        return priors
 
     def prune_impossible_hypotheses(self, df_trip, near_subway, near_bus):
         """
@@ -277,14 +244,8 @@ class BayesianRouteEvaluator:
             
         prob_vector_road = self.evaluate_completed_route_with_matrices(df_eval, 'Carro', subway_routes, bus_routes)
         
-        # Detección heurística de paradas/patrón de velocidad baja recurrente
-        # (Los autobuses paran constantemente y circulan a menor velocidad media en zonas de infraestructura)
-        avg_speed = df_eval['Speed [km/h]'].mean()
-        overlap_fraction = df_eval['near_bus_route'].mean()
-        
-        # Si la probabilidad bayesiana de Bus es superior a la de Carro,
-        # o si hay un alto solapamiento con la red de bus y velocidades moderadas:
-        if prob_vector_road['Bus'] > prob_vector_road['Carro'] or (overlap_fraction > 0.6 and avg_speed < 30.0):
+        # Si la probabilidad bayesiana de Bus es superior a la de Carro:
+        if prob_vector_road['Bus'] > prob_vector_road['Carro']:
             return 'Bus'
         else:
             return 'Carro'
