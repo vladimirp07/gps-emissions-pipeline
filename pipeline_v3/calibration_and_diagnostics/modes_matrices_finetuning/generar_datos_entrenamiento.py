@@ -149,15 +149,29 @@ def main():
         'L3': degradar_nivel_3
     }
     
+    # Configurar límite opcional para pruebas rápidas
+    import argparse
+    parser = argparse.ArgumentParser(description="Generar datos de entrenamiento para Optuna.")
+    parser.add_argument("--limit", type=int, default=None, help="Límite del número de viajes a procesar (para pruebas rápidas).")
+    args, unknown = parser.parse_known_args()
+    
     # Agrupar por usuario, viaje y modo real
     groups = df_all.groupby(['caid', 'trip', 'modo_transporte'])
-    print(f"Total de viajes unicos a evaluar: {len(groups)}")
+    total_groups = len(groups)
+    
+    if args.limit is not None:
+        print(f"Modo de prueba activo. Se limitará el procesamiento a los primeros {args.limit} viajes.")
+        groups_list = list(groups)[:args.limit]
+    else:
+        groups_list = list(groups)
+        
+    print(f"Total de viajes únicos a evaluar: {len(groups_list)}")
     
     registros_entrenamiento = []
     start_time = time.time()
     processed_trips = 0
     
-    for (caid, trip_id, modo_real), df_trip in groups:
+    for (caid, trip_id, modo_real), df_trip in groups_list:
         df_trip = df_trip.sort_values(by='local_timestamp').reset_index(drop=True)
         
         # Calcular distancias y velocidades lineales crudas para el prior
@@ -238,40 +252,62 @@ def main():
                     total_dist_km = df_routed['distance_m'].sum() / 1000.0
                     avg_speed = df_routed['Speed [km/h]'].mean()
                     
-                    velocidades = df_routed['Speed [km/h]'].fillna(0.0).tolist()
-                    near_subway_list = df_routed['near_subway_line'].fillna(0).tolist()
-                    near_bus_list = df_routed['near_bus_route'].fillna(0).tolist()
+                    # Realizar la indexación/binning antes de serializar el caché
+                    # 1. idx_c: Cercanía (0: Metro, 1: Bus, 2: Ninguno)
+                    idx_c = np.where(df_routed['near_subway_line'] == 1, 0,
+                                     np.where(df_routed['near_bus_route'] == 1, 1, 2))
+                    
+                    # 2. idx_v: Velocidad instantánea en bins: <=6, 6-20, 20-80, >80
+                    idx_v = np.digitize(df_routed['Speed [km/h]'].fillna(0.0).to_numpy(), bins=[6.001, 20.001, 80.001])
+                    
+                    # 3. idx_d_arr: Distancia total en bins, repetida N veces
+                    idx_d = np.digitize([total_dist_km], bins=[1.0, 6.001, 10.001, 18.001])[0]
+                    idx_d_arr = np.repeat(idx_d, len(df_routed))
+                    
+                    # 4. idx_vp_arr: Velocidad promedio del viaje en bins, repetida N veces
+                    idx_vp = np.digitize([avg_speed], bins=[6.001])[0]
+                    idx_vp_arr = np.repeat(idx_vp, len(df_routed))
+                    
+                    # Mapear modo real a capitalizado compatible
+                    real_mode_mapped = modo_real.strip().lower()
+                    if real_mode_mapped == 'caminar':
+                        label = 'Caminar'
+                    elif real_mode_mapped == 'carro':
+                        label = 'Carro'
+                    elif real_mode_mapped == 'bus':
+                        label = 'Bus'
+                    elif real_mode_mapped == 'metro':
+                        label = 'Metro'
+                    else:
+                        label = modo_real.capitalize()
                     
                     registros_entrenamiento.append({
-                        'caid': caid,
-                        'trip_id': trip_id,
-                        'modo_real': modo_real,
+                        'trip_id': f"{caid}_{trip_id}_{deg_name}_{modo_hip.lower()}",
+                        'label': label,
                         'modo_hipotesis': modo_hip.lower(),
                         'degradacion': deg_name,
-                        'distancia_ruteada_km': total_dist_km,
-                        'velocidad_promedio_kmh': avg_speed,
-                        'velocidades': velocidades,
-                        'near_subway_line': near_subway_list,
-                        'near_bus_route': near_bus_list
+                        'idx_c': np.array(idx_c, dtype=np.int32),
+                        'idx_v': np.array(idx_v, dtype=np.int32),
+                        'idx_d_arr': np.array(idx_d_arr, dtype=np.int32),
+                        'idx_vp_arr': np.array(idx_vp_arr, dtype=np.int32)
                     })
                     
                 except Exception:
                     continue
                     
         processed_trips += 1
-        if processed_trips % 20 == 0:
+        if processed_trips % 20 == 0 or processed_trips == len(groups_list):
             elapsed = time.time() - start_time
-            print(f" -> Procesados {processed_trips}/{len(groups)} viajes (Tiempo transcurrido: {elapsed:.1f}s, Muestras guardadas: {len(registros_entrenamiento)})")
+            print(f" -> Procesados {processed_trips}/{len(groups_list)} viajes (Tiempo transcurrido: {elapsed:.1f}s, Muestras guardadas: {len(registros_entrenamiento)})")
             
-    # Guardar los datos en formato pickle para conservar las estructuras de listas
-    df_training = pd.DataFrame(registros_entrenamiento)
+    # Guardar los datos en formato pickle
     output_pkl = config.GPS_DIR / "datos_entrenamiento_optuna.pkl"
     
-    print(f"\nGuardando {len(df_training)} muestras de entrenamiento ruteadas en: {output_pkl}")
+    print(f"\nGuardando {len(registros_entrenamiento)} muestras de entrenamiento ruteadas en: {output_pkl}")
     with open(output_pkl, 'wb') as f:
-        pickle.dump(df_training, f)
+        pickle.dump(registros_entrenamiento, f)
         
-    print(f"Generacion completada con exito. Tiempo de ejecucion: {time.time() - start_time:.1f}s")
+    print(f"Generación completada con éxito. Tiempo de ejecución: {time.time() - start_time:.1f}s")
 
 if __name__ == '__main__':
     main()
