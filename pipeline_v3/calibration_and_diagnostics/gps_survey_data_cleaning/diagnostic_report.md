@@ -11,8 +11,7 @@ El objetivo es cuantificar y localizar las incongruencias fisicas (velocidades i
 Para identificar los puntos anomalos, definimos tres tipos de inconsistencias:
 
 * **Inconsistencia de Velocidad por Modo (Anomalia de Velocidad):**
-  * **Caminar:** Velocidades instantaneas superiores a **15 km/h** (limite de trote/carrera ligera para una clasificacion peatonal).
-  * **Parada (Detenido):** Desplazamientos que reportan velocidades instantaneas superiores a **4 km/h** (lo que indica que el usuario se estaba moviendo significativamente a pesar de reportarse estatico).
+  * **Caminar:** Velocidades instantaneas superiores a **15 km/h** (limite de trote/carrera ligera para una clasificacion peatonal). Establecemos adicionalmente un umbral vehicular definitivo de **30 km/h** para la poda de viajes peatonales (vease la explicacion mas abajo).
   * **Metro / Autobus:** Velocidades instantaneas superiores a **110 km/h** (limite de velocidad operativa urbana).
   * **Automovil (Carro):** Velocidades instantaneas superiores a **160 km/h**.
 * **Inconsistencia Espacial de Infraestructura (Metro fuera de vias):**
@@ -20,11 +19,13 @@ Para identificar los puntos anomalos, definimos tres tipos de inconsistencias:
 * **Teletransportacion General (GPS Glitch):**
   * Saltos de posicion que requieran velocidades instantaneas superiores a **250 km/h** en cualquier modo de transporte.
 
+*Nota sobre el calculo de velocidad:* El uso de la distancia Haversine directa punto a punto tiende a sobreestimar la velocidad real debido al ruido de zig-zag o jitter intrinseco del GPS de alta frecuencia (1Hz). Por ello, se incrementan los umbrales de seguridad (como los 30 km/h en caminar) antes de proceder a la eliminacion de datos para evitar falsos positivos de limpieza. En futuras iteraciones del pipeline, debera implementarse un suavizado de coordenadas previo (ej. Filtro de Kalman o medias moviles) antes de calcular la velocidad.
+
 ---
 
 ## 2. Resultados del Diagnostico por Modo de Transporte
 
-A continuacion se presenta la proporcion de pings anomalos detectados, asi como la distancia y tiempo afectados por estas inconsistencias:
+A continuacion se presenta la proporcion de pings anomalos detectados, asi como la distancia y tiempo afectados por estas inconsistencias (excluyendo paradas, ya que no forman parte de las etiquetas del dataset de MATLAB y seran detectadas dinamicamente por la maquina de estados de nuestro algoritmo):
 
 | Modo de Transporte | Pings Totales | Pings Anomalos | % Pings Anomalos | % Distancia Afectada | % Tiempo Afectado | Detalles de la Anomalia |
 | :--- | :---: | :---: | :---: | :---: | :---: | :--- |
@@ -45,10 +46,11 @@ Dado el alto porcentaje de distancia afectada en los datos etiquetados manualmen
 | **> 10.0 km/h** | 16,803 | 9.09% | 248.77 km | 48.18% | Velocidad de carrera continua o vehiculo |
 | **> 15.0 km/h** | 16,039 | 8.68% | 244.40 km | 47.33% | Sprint imposible o vehiculo motorizado (Carro/Bus) |
 | **> 25.0 km/h** | 15,598 | 8.44% | 238.28 km | 46.15% | Transito vehicular urbano indudable |
+| **> 30.0 km/h (Vehiculo)** | 14,802 | 8.01% | 231.15 km | 44.77% | Velocidad de transito vehicular establecida |
 | **> 50.0 km/h** | 2,015 | 1.09% | 90.98 km | 17.62% | Transito vehicular en avenidas/autopistas |
 
 * **Conclusiones del analisis de distribucion:**
-  1. El **46.15% de la distancia total** declarada como caminata ocurrió a mas de **25 km/h**, lo cual es biologicamente imposible para un peaton.
+  1. El **44.77% de la distancia total** declarada como caminata ocurrió a mas de **30 km/h**, lo cual es biologicamente imposible para un peaton.
   2. Esto demuestra que los usuarios iniciaron la grabacion del viaje a pie y posteriormente se subieron a un carro o autobus olvidando cambiar la etiqueta del modo en la aplicacion.
   3. Calibrar las matrices de probabilidad o el ruteo basandose en que el usuario caminaba a estas velocidades introduce un sesgo inaceptable en los modelos de emisiones.
 
@@ -58,11 +60,11 @@ Dado el alto porcentaje de distancia afectada en los datos etiquetados manualmen
 
 Muchas veces un ping individual no es solo un error del GPS, sino que indica que **todo el viaje fue clasificado de manera incorrecta**. 
 
-Definimos que si un viaje tiene **mas del 30% de sus pings marcados como anomalos**, la clasificacion manual del viaje es erronea en su totalidad y el viaje completo deberia descartarse o reclasificarse.
+Definimos que si un viaje tiene **mas del 30% de sus pings marcados como anomalos**, la clasificacion manual del viaje es erronea en su totalidad y el viaje completo deberia descartarse.
 
 * **Cantidad Total de Viajes Auditados:** 335 viajes
 * **Viajes Incorrectos Detectados (>30% de error):** 10 viajes
-* **Porcentaje de Viajes a Eliminar/Reclasificar:** **2.99%** del total de viajes.
+* **Porcentaje de Viajes a Eliminar:** **2.99%** del total de viajes.
 * **Cantidad de Pings Involucrados en Viajes Incorrectos:** 3,929 pings (representa el **0.99%** del dataset completo).
 
 ### Ejemplos de Viajes Criticos con Clasificacion Erronea:
@@ -81,15 +83,16 @@ Definimos que si un viaje tiene **mas del 30% de sus pings marcados como anomalo
 
 ## 3.1 Tratamiento Propuesto para los Viajes Peatonales Erroneos
 
-Para resolver el problema del **47% de la distancia de caminar contaminada** con velocidad vehicular, aplicaremos las siguientes tres reglas de limpieza y curacion de datos:
+Para resolver el problema de los viajes de Caminar contaminados con velocidad vehicular, aplicaremos una estrategia basada estrictamente en la eliminacion y poda, descartando la idea de reetiquetar para evitar introducir sesgos e hipotesis no corroboradas:
 
-1. **Descarte Completo por Umbral (Viajes Mal Clasificados):**
-   * Descartar los viajes completos marcados como `Caminar` que posean mas de un 30% de puntos anomalos (como `DEDO-13` o `EJH-2`). Estos viajes completos representan fallas sistematicas del encuestado al reportar su modo.
-2. **Segmentacion y Division de Viajes Mixtos (Trip Splitting):**
-   * Si un viaje peatonal inicia a velocidad normal ($<6\text{ km/h}$) pero cambia a velocidades sostenidas de vehiculo ($>20\text{ km/h}$) durante mas de 3 minutos para luego volver a detenerse, el viaje debe dividirse.
-   * El tramo vehicular debe ser reetiquetado como `carro` o `bus` mediante clasificacion probabilistica espacial, o eliminarse de forma aislada para salvar los tramos peatonales correctos de inicio y fin.
-3. **Filtro de Glitch GPS Aislado (Spike Filtering):**
-   * Pings peatonales aislados que superan los 15 km/h durante un solo segundo pero regresan inmediatamente a $<5\text{ km/h}$ representan rebotes de señal. Estos puntos se deben eliminar de forma individual y su posicion debe interpolarse linealmente entre los pings vecinos.
+1. **Poda por Aceleracion Vehicular (Walking Trip Pruning):**
+   * Detectar el punto exacto en el tiempo (Timestamp) donde el viaje de Caminar supera el umbral de velocidad vehicular establecido (30 km/h).
+   * Truncar el viaje en ese instante, **conservando unicamente la primera parte** (que corresponde al trayecto logico a pie) y **eliminando toda la secuencia de puntos posterior** (el segmento vehicular).
+   * Esto nos permite salvar la porcion valida de la encuesta sin conservar el ruido posterior.
+2. **Descarte Completo de Viajes Sistematicos:**
+   * Si el viaje de caminar muestra velocidades anomales desde su inicio o no presenta una seccion inicial logica a pie, se descarta el viaje completo.
+3. **Filtro de Glitch GPS Aislado (Point-Level Spike Filtering):**
+   * Pings peatonales aislados que superan los 15 km/h durante un solo segundo pero regresan inmediatamente a $<5\text{ km/h}$ representan rebotes de senal. Estos puntos se deben eliminar de forma individual y su posicion debe interpolarse linealmente entre los pings vecinos.
 
 ---
 
