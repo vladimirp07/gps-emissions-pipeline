@@ -1,108 +1,84 @@
-# Diagnostico de Calidad de Datos del Dataset de MATLAB
+# Propuesta de Limpieza y Diagnostico de Calidad de Datos del Dataset de MATLAB
 
-Este reporte documenta los resultados de la auditoria fisica y espacial realizada sobre los datos de encuesta de MATLAB (`Datos de MATLAB GPS.csv`), la cual fue etiquetada de forma manual por los participantes de la encuesta. 
+Este reporte documenta la propuesta de limpieza y los resultados del diagnostico de calidad fisica y espacial realizado sobre los datos de encuesta de MATLAB (`Datos de MATLAB GPS.csv`), etiquetados de forma manual por los participantes. 
 
-El objetivo es cuantificar y localizar las incongruencias fisicas (velocidades imposibles por modo, glitches de teletransportacion) y espaciales (metro operando fuera de la red ferroviaria) para fundamentar un proceso de depuracion de datos en el futuro.
+El objetivo es establecer y justificar una metodologia de depuracion para eliminar glitches de GPS y viajes mal clasificados, garantizando la compatibilidad del formato original y eliminando el sesgo que introducen los datos erroneos en la calibracion de matrices de transicion y modelos de emisiones.
 
 ---
 
-## 1. Criterios de Calidad de Datos Aplicados
+## 1. Criterios de Calidad de Datos Establecidos
 
-Para identificar los puntos anomalos, definimos tres tipos de inconsistencias:
+Para la depuracion de los datos de MATLAB, aplicamos dos niveles de limpieza: **Limpieza a Nivel de Puntos (Glitch GPS)** y **Limpieza a Nivel de Viajes (Misclassified Trips)**. Definimos los siguientes criterios especificos:
 
-* **Inconsistencia de Velocidad por Modo (Anomalia de Velocidad):**
-  * **Caminar:** Velocidades instantaneas superiores a **15 km/h** (limite de trote/carrera ligera para una clasificacion peatonal). Establecemos adicionalmente un umbral vehicular definitivo de **30 km/h** para la poda de viajes peatonales (vease la explicacion mas abajo).
-  * **Metro / Autobus:** Velocidades instantaneas superiores a **110 km/h** (limite de velocidad operativa urbana).
-  * **Automovil (Carro):** Velocidades instantaneas superiores a **160 km/h**.
+* **Inconsistencia de Velocidad por Modo (Limites Fisicos):**
+  * **Caminar:** Velocidades instantaneas superiores a **30 km/h**.
+    * *Nota de Calibracion:* Aunque 30 km/h es una velocidad vehicular, se establece este umbral para caminar porque el calculo de velocidad mediante distancia Haversine directa punto a punto sobreestima la velocidad real debido al ruido de zig-zag o jitter intrinseco del GPS de alta frecuencia. En un desarrollo posterior del pipeline, se debera implementar un preprocesamiento de suavizado (como Filtro de Kalman o medias moviles) para afinar esta velocidad, pero por ahora los 30 km/h actuan como umbral vehicular definitivo.
+  * **Metro / Autobus (Bus):** Velocidades instantaneas superiores a **110 km/h** (limite maximo operativo en la zona urbana).
+  * **Automovil (Carro):** Velocidades instantaneas superiores a **160 km/h** (limite razonable de transito en autopista con margen de error de GPS).
 * **Inconsistencia Espacial de Infraestructura (Metro fuera de vias):**
   * Pings clasificados como `metro` que se ubican a mas de **300 metros** de distancia de la linea geometrica oficial de Metrorrey (`lineas_metrorrey.csv`).
 * **Teletransportacion General (GPS Glitch):**
-  * Saltos de posicion que requieran velocidades instantaneas superiores a **250 km/h** en cualquier modo de transporte.
-
-*Nota sobre el calculo de velocidad:* El uso de la distancia Haversine directa punto a punto tiende a sobreestimar la velocidad real debido al ruido de zig-zag o jitter intrinseco del GPS de alta frecuencia (1Hz). Por ello, se incrementan los umbrales de seguridad (como los 30 km/h en caminar) antes de proceder a la eliminacion de datos para evitar falsos positivos de limpieza. En futuras iteraciones del pipeline, debera implementarse un suavizado de coordenadas previo (ej. Filtro de Kalman o medias moviles) antes de calcular la velocidad.
+  * Saltos de posicion individuales que requieran velocidades instantaneas superiores a **250 km/h** en cualquier modo de transporte.
+* **Exclusion de Filtro para Paradas:**
+  * No se aplica ningun filtro estatico de velocidad o distancia sobre el modo "parada" o paradas fisicas en este dataset, ya que la maquina de estados de nuestro algoritmo de ruteo y clasificacion se encargara de identificar y tratar las paradas de forma dinamica.
 
 ---
 
-## 2. Resultados del Diagnostico por Modo de Transporte
+## 2. Analisis Fisico por Modo de Transporte (Datos Originales)
 
-A continuacion se presenta la proporcion de pings anomalos detectados, asi como la distancia y tiempo afectados por estas inconsistencias (excluyendo paradas, ya que no forman parte de las etiquetas del dataset de MATLAB y seran detectadas dinamicamente por la maquina de estados de nuestro algoritmo):
+A continuacion se presenta la proporcion de pings anomalos detectados originalmente en el dataset de MATLAB usando los criterios basicos de velocidad y espacio:
 
 | Modo de Transporte | Pings Totales | Pings Anomalos | % Pings Anomalos | % Distancia Afectada | % Tiempo Afectado | Detalles de la Anomalia |
 | :--- | :---: | :---: | :---: | :---: | :---: | :--- |
-| **Caminar** | 184,860 | 16,039 | 8.68% | 47.33% | 1.03% | 8.7% exceden vel. max, 0.0% glitches GPS |
+| **Caminar** | 184,860 | 14,802 | 8.01% | 44.77% | 0.95% | 8.0% exceden vel. max (>30 km/h), 0.0% glitches GPS |
 | **Carro** | 167,230 | 449 | 0.27% | 12.82% | 0.05% | 0.3% exceden vel. max, 0.3% glitches GPS |
 | **Bus** | 34,705 | 2,631 | 7.58% | 98.55% | 0.92% | 7.6% exceden vel. max, 7.6% glitches GPS |
-| **Metro** | 8,674 | 39 | 0.45% | 7.12% | 0.03% | 0.4% exceden vel. max, 0.0% glitches GPS |
+| **Metro** | 8,674 | 39 | 0.45% | 7.12% | 0.03% | 0.4% exceden vel. max, 0.4% fuera de vias (>300m) |
 
 ---
 
-## 2.1 Distribucion de Velocidades en el Modo Caminar (Anomalias Peatonales)
+## 2.1 Distribucion de Velocidades en el Modo Caminar
 
-Dado el alto porcentaje de distancia afectada en los datos etiquetados manualmente como `Caminar`, realizamos un analisis de distribucion acumulada de velocidades instantaneas sobre los **184,860 pings peatonales** para identificar el tipo de error en la encuesta:
+Dado el alto impacto espacial en los datos de Caminar, la distribucion acumulada de velocidades instantaneas sobre los **184,860 pings peatonales** revela lo siguiente:
 
 | Umbral de Velocidad | Pings que lo superan | % Pings Peatonales | Distancia Acumulada (km) | % Distancia de Caminar | Tipo de Incongruencia / Diagnostico |
 | :--- | :---: | :---: | :---: | :---: | :--- |
-| **> 6.0 km/h** | 20,911 | 11.31% | 269.75 km | 52.24% | Trote, carrera o transito vehicular |
+| **> 6.0 km/h** | 20,911 | 11.31% | 269.75 km | 52.24% | Trote o carrera ligera |
 | **> 10.0 km/h** | 16,803 | 9.09% | 248.77 km | 48.18% | Velocidad de carrera continua o vehiculo |
-| **> 15.0 km/h** | 16,039 | 8.68% | 244.40 km | 47.33% | Sprint imposible o vehiculo motorizado (Carro/Bus) |
+| **> 15.0 km/h** | 16,039 | 8.68% | 244.40 km | 47.33% | Sprint humano limite o vehiculo |
 | **> 25.0 km/h** | 15,598 | 8.44% | 238.28 km | 46.15% | Transito vehicular urbano indudable |
-| **> 30.0 km/h (Vehiculo)** | 14,802 | 8.01% | 231.15 km | 44.77% | Velocidad de transito vehicular establecida |
+| **> 30.0 km/h (Umbral)**| 14,802 | 8.01% | 231.15 km | 44.77% | **Vehiculo motorizado indudable (Carro/Bus)** |
 | **> 50.0 km/h** | 2,015 | 1.09% | 90.98 km | 17.62% | Transito vehicular en avenidas/autopistas |
 
-* **Conclusiones del analisis de distribucion:**
-  1. El **44.77% de la distancia total** declarada como caminata ocurrió a mas de **30 km/h**, lo cual es biologicamente imposible para un peaton.
-  2. Esto demuestra que los usuarios iniciaron la grabacion del viaje a pie y posteriormente se subieron a un carro o autobus olvidando cambiar la etiqueta del modo en la aplicacion.
-  3. Calibrar las matrices de probabilidad o el ruteo basandose en que el usuario caminaba a estas velocidades introduce un sesgo inaceptable en los modelos de emisiones.
+* **Conclusion clave:** El **44.77% de la distancia total** declarada bajo la etiqueta de Caminar ocurrio a velocidades superiores a 30 km/h (y el 46.15% a mas de 25 km/h). Esto confirma que casi la mitad de los datos peatonales corresponden en realidad a trayectos vehiculares (el participante abordo un autobus o automovil pero olvido apagar la grabacion o cambiar la etiqueta manual del viaje).
 
 ---
 
-## 3. Diagnostico de Calidad a Nivel de Viaje (Trip-Level)
+## 3. Estrategia de Depuracion Aplicada
 
-Muchas veces un ping individual no es solo un error del GPS, sino que indica que **todo el viaje fue clasificado de manera incorrecta**. 
+Para limpiar el dataset sin introducir suposiciones de reetiquetado (lo que podria sesgar el modelo), se aplica una estrategia de **poda y eliminacion**:
 
-Definimos que si un viaje tiene **mas del 30% de sus pings marcados como anomalos**, la clasificacion manual del viaje es erronea en su totalidad y el viaje completo deberia descartarse.
+### 3.1 Limpieza a Nivel de Viajes (Misclassified Trips)
+* **Descarte por Fraccion de Error:** Si un viaje (agrupado por `caid` y `num_trip`) presenta **mas del 30% de sus pings originales como anomalos** (por excesos de velocidad en carro/bus/metro o distancia del metro a las vias), se asume que la clasificacion manual de todo el viaje fue incorrecta y se **elimina el viaje completo**.
+* **Descarte de Viajes Vacios o Minimos:** Si tras aplicar la limpieza de puntos un viaje queda con menos de **2 pings**, se elimina por completo para evitar errores de ruteo.
 
-* **Cantidad Total de Viajes Auditados:** 335 viajes
-* **Viajes Incorrectos Detectados (>30% de error):** 10 viajes
-* **Porcentaje de Viajes a Eliminar:** **2.99%** del total de viajes.
-* **Cantidad de Pings Involucrados en Viajes Incorrectos:** 3,929 pings (representa el **0.99%** del dataset completo).
-
-### Ejemplos de Viajes Criticos con Clasificacion Erronea:
-| Usuario (caid) | ID Viaje | Modo Declarado | Pings Totales | Pings Anomalos | % Anomalos | Recomendacion |
-| :--- | :---: | :---: | :---: | :---: | :---: | :--- |
-| CHH | 13 | Bus | 1,488 | 1,243 | 83.5% | Eliminar viaje completo |
-| CHH | 25 | Bus | 1,268 | 712 | 56.2% | Eliminar viaje completo |
-| DEDO | 13 | Caminar | 70 | 32 | 45.7% | Eliminar viaje completo |
-| EJH | 2 | Caminar | 84 | 38 | 45.2% | Eliminar viaje completo |
-| DEPO | 2 | Caminar | 146 | 62 | 42.5% | Eliminar viaje completo |
-| EJH | 1 | Caminar | 62 | 26 | 41.9% | Eliminar viaje completo |
-| DEDO | 3 | Caminar | 169 | 70 | 41.4% | Eliminar viaje completo |
-| FAA | 2 | Caminar | 187 | 68 | 36.4% | Eliminar viaje completo |
+### 3.2 Limpieza a Nivel de Puntos y Poda de Viajes Peatonales (Walking Trip Pruning)
+* **Poda de Caminatas Vehiculares:** Para los viajes de Caminar que no superan el 30% de error total, pero que en algun punto muestran velocidades de vehiculo (>30 km/h):
+  * Se identifica cronologicamente el **primer punto** del viaje donde la velocidad es superior a **30 km/h**.
+  * Se realiza una **poda** (truncado) en ese instante exacto: se **conserva la primera parte** del viaje (trayecto peatonal logico) y se **elimina ese punto y todos los subsecuentes** (segmento donde el participante abordo un vehiculo).
+  * Si la porcion valida restante tiene menos de 2 pings, el viaje se descarta por completo.
+* **Filtro de Glitch GPS Aislado:**
+  * En viajes validos de cualquier modo (incluyendo la porcion valida de las caminatas), los pings individuales marcados como anomalos (por ejemplo, glitches aislados de teletransportacion >250 km/h) son eliminados individualmente.
 
 ---
 
-## 3.1 Tratamiento Propuesto para los Viajes Peatonales Erroneos
+## 4. Implementacion del Codigo de Depuracion
 
-Para resolver el problema de los viajes de Caminar contaminados con velocidad vehicular, aplicaremos una estrategia basada estrictamente en la eliminacion y poda, descartando la idea de reetiquetar para evitar introducir sesgos e hipotesis no corroboradas:
+El proceso ha sido automatizado en el script [depurar_datos_matlab.py](file:///C:/Users/Eydan/OneDrive/Escritorio/ITESM/MAITEC%20Lab/Eventos%20Masivos/GPS_Emissions_Project_Pipeline-v2.0/pipeline_v3/calibration_and_diagnostics/gps_survey_data_cleaning/depurar_datos_matlab.py). 
 
-1. **Poda por Aceleracion Vehicular (Walking Trip Pruning):**
-   * Detectar el punto exacto en el tiempo (Timestamp) donde el viaje de Caminar supera el umbral de velocidad vehicular establecido (30 km/h).
-   * Truncar el viaje en ese instante, **conservando unicamente la primera parte** (que corresponde al trayecto logico a pie) y **eliminando toda la secuencia de puntos posterior** (el segmento vehicular).
-   * Esto nos permite salvar la porcion valida de la encuesta sin conservar el ruido posterior.
-2. **Descarte Completo de Viajes Sistematicos:**
-   * Si el viaje de caminar muestra velocidades anomales desde su inicio o no presenta una seccion inicial logica a pie, se descarta el viaje completo.
-3. **Filtro de Glitch GPS Aislado (Point-Level Spike Filtering):**
-   * Pings peatonales aislados que superan los 15 km/h durante un solo segundo pero regresan inmediatamente a $<5\text{ km/h}$ representan rebotes de senal. Estos puntos se deben eliminar de forma individual y su posicion debe interpolarse linealmente entre los pings vecinos.
-
----
-
-## 4. Resumen y Plan de Limpieza de Datos
-
-### Proporcion de Datos Potencialmente Eliminables/Corregibles:
-1. **Limpieza a Nivel de Puntos (Glitch GPS):** Podemos remover un **4.81%** de los pings individuales del dataset sin alterar el resto de las secuencias de viaje, eliminando el ruido y picos de teletransportacion.
-2. **Limpieza a Nivel de Viajes (Misclassified Trips):** Deberiamos depurar el **2.99%** de los viajes completos que fueron etiquetados con el modo equivocado (como el caso de caminar a velocidades de autopista o el metro transitando lejos de las vias ferroviarias).
-
-### Pasos Futuros para la Depuracion:
-1. **Descarte de Gaps y Teleportacion:** Programar un script en esta carpeta para filtrar puntos donde $v > 250\text{ km/h}$.
-2. **Criterio de Proximidad Vial:** Para los viajes de Metro, corregir la etiqueta a `carro` o `bus` si el viaje ocurre lejos de las vias, o bien removerlo si no es posible discernir el modo real.
-3. **Suavizado de Velocidad Peatonal:** Reclasificar tramos marcados como `caminar` a `bus`/`carro` si la velocidad es consistentemente alta (e.g. $> 15\text{ km/h}$) durante mas de 3 pings seguidos.
+Este codigo:
+1. Lee los datos originales en `Inputs/GPS User Data/Datos de MATLAB GPS.csv`.
+2. Procesa cronologicamente cada viaje para detectar anomalias puntuales y de trayecto.
+3. Aplica los descartes de viajes y la poda de trayectos peatonales vehicularizados.
+4. Elimina las columnas auxiliares creadas para el procesamiento.
+5. Exporta el archivo depurado a `Inputs/GPS User Data/Datos de MATLAB GPS Limpios.csv` en el **mismo formato exacto** (mismas columnas, tipos y orden) para asegurar compatibilidad total con el pipeline principal.
