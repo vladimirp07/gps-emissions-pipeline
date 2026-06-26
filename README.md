@@ -7,17 +7,17 @@ This repository contains a modular Python-based pipeline designed to preprocess 
 The workflow processes spatial-temporal GPS pings through the following sequential stages:
 
 ```mermaid
-flowchart TD
+flowchart LR
     subgraph Phase1 ["Phase 1: Preprocessing & Networks"]
-        direction LR
+        direction TD
         A["Raw GPS Input"] --> B["Segmentation<br>(Stop detection & trip splitting)"] --> C["Route Hypothesis<br>(Modal candidate subgraphs)"]
     end
     subgraph Phase2 ["Phase 2: Map Matching & Classification"]
-        direction LR
+        direction TD
         D["Map Matching & Route Completion<br>(Snapping & path reconstruction)"] --> E["Modal Classification<br>(Bayesian posterior mode prediction)"]
     end
     subgraph Phase3 ["Phase 3: Emissions & Analysis"]
-        direction LR
+        direction TD
         F["Emissions Estimation<br>(MOVES-based calculations)"] --> G["Event Analysis<br>(Macroscopic impact aggregation)"]
     end
     C --> D
