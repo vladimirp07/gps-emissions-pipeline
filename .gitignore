@@ -56,3 +56,7 @@ Thumbs.db
 
 # 6. Local Visual Content & Presentation Generation
 visual_content/
+
+# 7. Local Calibration Experiments Images & Figures
+pipeline_v3/calibracion/experimentos_intervencion/
+pipeline_v3/calibracion/*.png

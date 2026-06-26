@@ -1,3 +1,4 @@
+import os
 import time
 import pickle
 import pandas as pd
@@ -379,7 +380,8 @@ def complete_route(id, registros_person,
                 limite_calle = 40.0
             
             # NUEVO: Fix Lógico para permitir rebase de límite de calle (margen de 50%) sin sobrepasar límite global
-            v_techo = limite_calle * 1.5 if modo_actual not in ['Caminar', 'Parada'] else max_speed_kmh
+            physics_factor = float(os.environ.get('PHYSICS_FACTOR', '1.5'))
+            v_techo = limite_calle * physics_factor if modo_actual not in ['Caminar', 'Parada'] else max_speed_kmh
             techo_final = min(v_techo, max_speed_kmh) if modo_actual not in ['Caminar', 'Parada'] else max_speed_kmh
             
             # Validación global del viaje
@@ -895,7 +897,8 @@ def complete_route_v1_optimized(id, registros_person,
             except:
                 limite_calle = 40.0
             
-            v_techo = limite_calle * 1.5 if modo_actual not in ['Caminar', 'Parada'] else max_speed_kmh
+            physics_factor = float(os.environ.get('PHYSICS_FACTOR', '1.5'))
+            v_techo = limite_calle * physics_factor if modo_actual not in ['Caminar', 'Parada'] else max_speed_kmh
             techo_final = min(v_techo, max_speed_kmh) if modo_actual not in ['Caminar', 'Parada'] else max_speed_kmh
             
             distancia_m_best = sum(t[2] for t in best_tramos)
@@ -1416,7 +1419,8 @@ def complete_route_v2_optimized(id, registros_person,
             except:
                 limite_calle = 40.0
             
-            v_techo = limite_calle * 1.5 if modo_actual not in ['Caminar', 'Parada'] else max_speed_kmh
+            physics_factor = float(os.environ.get('PHYSICS_FACTOR', '1.5'))
+            v_techo = limite_calle * physics_factor if modo_actual not in ['Caminar', 'Parada'] else max_speed_kmh
             techo_final = min(v_techo, max_speed_kmh) if modo_actual not in ['Caminar', 'Parada'] else max_speed_kmh
             
             distancia_m_best = sum(t[2] for t in best_tramos_ig)
