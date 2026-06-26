@@ -58,5 +58,5 @@ Thumbs.db
 visual_content/
 
 # 7. Local Calibration Experiments Images & Figures
-pipeline_v3/calibracion/experimentos_intervencion/
-pipeline_v3/calibracion/*.png
+pipeline_v3/calibration_and_diagnostics/routing_algorithm_calibration/*/*.png
+pipeline_v3/calibration_and_diagnostics/routing_algorithm_calibration/*.png
