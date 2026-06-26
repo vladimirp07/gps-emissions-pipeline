@@ -134,6 +134,7 @@ def main():
     df_all = pd.read_csv(clean_matlab_path)
     
     # Estandarizar nombres de columnas para el ruteador
+    df_all = df_all.drop(columns=['trip'], errors='ignore')
     df_all = df_all.rename(columns={'lat': 'latitude', 'lon': 'longitude', 'num_trip': 'trip'})
     df_all['local_timestamp'] = pd.to_datetime(df_all['Timestamp'])
     df_all['modo_transporte'] = df_all['mode_of_transport'].str.strip().str.lower()
