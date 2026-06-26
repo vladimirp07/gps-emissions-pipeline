@@ -8,29 +8,30 @@ The workflow processes spatial-temporal GPS pings through the following sequenti
 
 ```mermaid
 flowchart LR
-    subgraph Phase1 ["Phase 1: Preprocessing & Networks"]
+    subgraph Phase1 ["Phase 1: Preprocessing"]
         direction TD
         A["Raw GPS Input"] --> B["Segmentation<br>(Stop detection & trip splitting)"]
-        B --> C["Route Hypothesis<br>(Modal candidate subgraphs)"]
     end
 
-    subgraph Phase2 ["Phase 2: Map Matching & Classification"]
+    subgraph Phase2 ["Phase 2: Network Alignment"]
         direction TD
-        D["Map Matching & Route Completion<br>(Snapping & path reconstruction)"] --> E["Modal Classification<br>(Bayesian posterior mode prediction)"]
-        E ~~~ Spacer2[" "]
-        style Spacer2 opacity:0,fill:none,stroke:none
+        C["Route Hypothesis<br>(Modal candidate subgraphs)"] --> D["Map Matching & Route Completion<br>(Snapping & path reconstruction)"]
     end
 
-    subgraph Phase3 ["Phase 3: Emissions & Analysis"]
+    subgraph Phase3 ["Phase 3: Classification & Estimates"]
         direction TD
-        F["Emissions Estimation<br>(MOVES-based calculations)"] --> G["Event Analysis<br>(Macroscopic impact aggregation)"]
-        G ~~~ Spacer3[" "]
-        style Spacer3 opacity:0,fill:none,stroke:none
+        E["Modal Classification<br>(Bayesian posterior mode prediction)"] --> F["Emissions Estimation<br>(MOVES criteria & GHG calculations)"]
+    end
+
+    subgraph Phase4 ["Phase 4: Macroscopic Impact"]
+        direction TD
+        G["Event Analysis<br>(Environmental impact aggregation)"] --> H["Macroscopic Evaluation<br>(Event mobility & emissions reporting)"]
     end
 
     %% Conexión horizontal directa entre los contenedores globales
     Phase1 --> Phase2
     Phase2 --> Phase3
+    Phase3 --> Phase4
 ```
 
 ## Repository Structure
