@@ -17,11 +17,15 @@ flowchart LR
     subgraph Phase2 ["Phase 2: Map Matching & Classification"]
         direction TD
         D["Map Matching & Route Completion<br>(Snapping & path reconstruction)"] --> E["Modal Classification<br>(Bayesian posterior mode prediction)"]
+        E ~~~ Spacer2[" "]
+        style Spacer2 opacity:0,fill:none,stroke:none
     end
 
     subgraph Phase3 ["Phase 3: Emissions & Analysis"]
         direction TD
         F["Emissions Estimation<br>(MOVES-based calculations)"] --> G["Event Analysis<br>(Macroscopic impact aggregation)"]
+        G ~~~ Spacer3[" "]
+        style Spacer3 opacity:0,fill:none,stroke:none
     end
 
     %% Conexión horizontal directa entre los contenedores globales
