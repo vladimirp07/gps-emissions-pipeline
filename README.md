@@ -1,6 +1,6 @@
 # GPS Trajectory Processing and Emissions Estimation Pipeline
 
-This repository contains a modular Python-based pipeline designed to preprocess raw GPS trajectory datasets, perform map-matching routing on urban road networks, classify transportation modes, and estimate criteria pollutant emissions.
+This repository contains a modular Python-based pipeline designed to preprocess raw GPS trajectory datasets, perform map-matching routing on urban road networks, classify transportation modes, estimate criteria pollutant and greenhouse gas (GHG) emissions, and quantify the macroscopic environmental and mobility impact of massive public events.
 
 ## Pipeline Overview
 
