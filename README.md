@@ -1,6 +1,6 @@
 # GPS Trajectory Processing and Emissions Estimation Pipeline
 
-This repository contains a modular Python-based pipeline designed to preprocess raw GPS trajectory datasets, perform map-matching routing on urban road networks, classify transportation modes, estimate criteria pollutant and greenhouse gas (GHG) emissions, and quantify the macroscopic environmental and mobility impact of massive public events.
+This repository contains a modular Python-based pipeline designed to preprocess raw GPS trajectory datasets, perform map-matching routing on urban road networks, classify transportation modes, estimate criteria pollutant and greenhouse gas (GHG) emissions, and quantify the multi-scale (micro/macro) environmental and mobility impact of massive public events.
 
 ## Pipeline Overview
 
@@ -13,7 +13,7 @@ flowchart LR
         A["Raw GPS Input"] --> B["Segmentation<br>(Stop detection & trip splitting)"]
     end
 
-    subgraph Phase2 ["Phase 2: Network Alignment"]
+    subgraph Phase2 ["Phase 2: Route Matching & Completion"]
         direction TD
         C["Route Hypothesis<br>(Modal candidate subgraphs)"] --> D["Map Matching & Route Completion<br>(Snapping & path reconstruction)"]
     end
@@ -23,9 +23,9 @@ flowchart LR
         E["Modal Classification<br>(Bayesian posterior mode prediction)"] --> F["Emissions Estimation<br>(MOVES criteria & GHG calculations)"]
     end
 
-    subgraph Phase4 ["Phase 4: Macroscopic Impact"]
+    subgraph Phase4 ["Phase 4: Impact Evaluation"]
         direction TD
-        G["Event Analysis<br>(Environmental impact aggregation)"] --> H["Macroscopic Evaluation<br>(Event mobility & emissions reporting)"]
+        G["Event Analysis<br>(Environmental impact aggregation)"] --> H["Impact Assessment<br>(Micro/macro event mobility & emissions reporting)"]
     end
 
     %% Conexión horizontal directa entre los contenedores globales
