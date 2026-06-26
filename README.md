@@ -6,13 +6,15 @@ This repository contains a modular Python-based pipeline designed to preprocess 
 
 The workflow processes spatial-temporal GPS pings through the following sequential stages:
 
-Raw GPS
-→ Segmentation (detects stops and splits pings into active trips)
-→ Route Hypothesis Generation (prepares candidate networks based on proximity filters)
-→ Map Matching (snaps coordinates to OpenStreetMap segments using topological routing)
-→ Modal Classification (predicts transport mode—Car, Bus, Subway, Walk, Stop—using Bayesian posterior evaluation)
-→ Emissions Estimation (estimates CO2, CO, NOx, PM2.5, HC, PM10, and CO2_Equiv emissions based on MOVES emission rates)
-→ Event Analysis (aggregates data for macroscopic environmental impact analysis)
+```mermaid
+flowchart TD
+    A["Raw GPS Data Input"] --> B["Segmentation (Stop detection & trip splitting)"]
+    B --> C["Route Hypothesis (Candidate network generation)"]
+    C --> D["Map Matching (Topological snapping to OpenStreetMap)"]
+    D --> E["Modal Classification (Bayesian posterior mode prediction)"]
+    E --> F["Emissions Estimation (MOVES criteria pollutants calculation)"]
+    F --> G["Event Analysis (Macroscopic impact aggregation)"]
+```
 
 ## Repository Structure
 
