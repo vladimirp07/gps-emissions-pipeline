@@ -10,15 +10,23 @@ The workflow processes spatial-temporal GPS pings through the following sequenti
 flowchart LR
     subgraph Phase1 ["Phase 1: Preprocessing & Networks"]
         direction TD
-        A["Raw GPS Input"] --> B["Segmentation<br>(Stop detection & trip splitting)"] --> C["Route Hypothesis<br>(Modal candidate subgraphs)"]
+        A["Raw GPS Input"]
+        B["Segmentation<br>(Stop detection & trip splitting)"]
+        C["Route Hypothesis<br>(Modal candidate subgraphs)"]
+        A --> B
+        B --> C
     end
     subgraph Phase2 ["Phase 2: Map Matching & Classification"]
         direction TD
-        D["Map Matching & Route Completion<br>(Snapping & path reconstruction)"] --> E["Modal Classification<br>(Bayesian posterior mode prediction)"]
+        D["Map Matching & Route Completion<br>(Snapping & path reconstruction)"]
+        E["Modal Classification<br>(Bayesian posterior mode prediction)"]
+        D --> E
     end
     subgraph Phase3 ["Phase 3: Emissions & Analysis"]
         direction TD
-        F["Emissions Estimation<br>(MOVES-based calculations)"] --> G["Event Analysis<br>(Macroscopic impact aggregation)"]
+        F["Emissions Estimation<br>(MOVES-based calculations)"]
+        G["Event Analysis<br>(Macroscopic impact aggregation)"]
+        F --> G
     end
     C --> D
     E --> F
