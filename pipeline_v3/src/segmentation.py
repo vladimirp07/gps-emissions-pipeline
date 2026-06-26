@@ -189,3 +189,27 @@ def assign_trips(df):
         
     df['trip'] = trips
     return df
+
+def apply_spatial_filter(df, min_dist_m=15.0):
+    """
+    Elimina pings sucesivos cuya distancia Haversine al ping guardado anterior
+    sea menor a min_dist_m metros.
+    """
+    if len(df) <= 2:
+        return df.copy()
+    
+    kept_indices = [0]
+    last_idx = 0
+    lats = df['latitude'].to_numpy()
+    lons = df['longitude'].to_numpy()
+    
+    for i in range(1, len(df) - 1):
+        d = haversine_vectorized(lats[last_idx], lons[last_idx], lats[i], lons[i]) * 1000.0
+        if d >= min_dist_m:
+            kept_indices.append(i)
+            last_idx = i
+            
+    kept_indices.append(len(df) - 1)
+    kept_indices = sorted(list(set(kept_indices)))
+    
+    return df.iloc[kept_indices].copy().reset_index(drop=True)
