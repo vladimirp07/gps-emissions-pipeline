@@ -6,7 +6,7 @@ Dado que la clasificación original de los modos de transporte fue realizada de 
 
 ---
 
-## 🛠️ Plan de Depuración y Auditoría Física
+## Plan de Depuración y Auditoría Física
 
 A continuación se detallan las incongruencias específicas que se auditarán y corregirán viaje por viaje, modo por modo:
 
@@ -29,7 +29,7 @@ Filtrar pings sucesivos cuya velocidad geodésica instantánea ($v = \Delta d / 
 
 ---
 
-## 📈 Entregables Esperados en esta Carpeta
+## Entregables Esperados en esta Carpeta
 
 * `notebooks/`: Notebooks interactivos de diagnóstico visual para graficar la distribución de incongruencias.
 * `src/`: Scripts modulares para automatizar la limpieza y exportar el dataset purgado manteniendo el mismo esquema de columnas original (`caid`, `num_trip`, `lat`, `lon`, `Timestamp`, `mode_of_transport`).
