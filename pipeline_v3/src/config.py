@@ -30,3 +30,7 @@ FILE_CACHE_IG_WALK = CACHE_INFRA_DIR / "ig_walk_y_map.pkl"
 
 # Rutas de Factores de Emisión de MOVES
 FILE_MOVES = RATES_DIR / "cleaned_emission_rates_formatted_SB.parquet"
+
+# Clasificación modal de producción. Bayes queda disponible sólo como fallback explícito.
+MODAL_CLASSIFIER = "random_forest"
+ENABLE_BAYES_FALLBACK = False

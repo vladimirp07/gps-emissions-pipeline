@@ -1,84 +1,122 @@
-# Propuesta de Limpieza y Diagnostico de Calidad de Datos del Dataset de MATLAB
+# Reporte Consolidado de Diagnóstico, Limpieza y Segmentación (Dataset de MATLAB GPS)
 
-Este reporte documenta la propuesta de limpieza y los resultados del diagnostico de calidad fisica y espacial realizado sobre los datos de encuesta de MATLAB (`Datos de MATLAB GPS.csv`), etiquetados de forma manual por los participantes. 
+Este reporte documenta el análisis exploratorio de datos (EDA), los resultados del diagnóstico de calidad física y espacial, y la validación de la segmentación temporal realizada sobre los datos de encuesta de MATLAB (`Datos de MATLAB GPS.csv`), etiquetados manualmente por los participantes. 
 
-El objetivo es establecer y justificar una metodologia de depuracion para eliminar glitches de GPS y viajes mal clasificados, garantizando la compatibilidad del formato original y eliminando el sesgo que introducen los datos erroneos en la calibracion de matrices de transicion y modelos de emisiones.
-
----
-
-## 1. Criterios de Calidad de Datos Establecidos
-
-Para la depuracion de los datos de MATLAB, aplicamos dos niveles de limpieza: **Limpieza a Nivel de Puntos (Glitch GPS)** y **Limpieza a Nivel de Viajes (Misclassified Trips)**. Definimos los siguientes criterios especificos:
-
-* **Inconsistencia de Velocidad por Modo (Limites Fisicos):**
-  * **Caminar:** Velocidades instantaneas superiores a **30 km/h**.
-    * *Nota de Calibracion:* Aunque 30 km/h es una velocidad vehicular, se establece este umbral para caminar porque el calculo de velocidad mediante distancia Haversine directa punto a punto sobreestima la velocidad real debido al ruido de zig-zag o jitter intrinseco del GPS de alta frecuencia. En un desarrollo posterior del pipeline, se debera implementar un preprocesamiento de suavizado (como Filtro de Kalman o medias moviles) para afinar esta velocidad, pero por ahora los 30 km/h actuan como umbral vehicular definitivo.
-  * **Metro / Autobus (Bus):** Velocidades instantaneas superiores a **110 km/h** (limite maximo operativo en la zona urbana).
-  * **Automovil (Carro):** Velocidades instantaneas superiores a **160 km/h** (limite razonable de transito en autopista con margen de error de GPS).
-* **Inconsistencia Espacial de Infraestructura (Metro fuera de vias):**
-  * Pings clasificados como `metro` que se ubican a mas de **300 metros** de distancia de la linea geometrica oficial de Metrorrey (`lineas_metrorrey.csv`).
-* **Teletransportacion General (GPS Glitch):**
-  * Saltos de posicion individuales que requieran velocidades instantaneas superiores a **250 km/h** en cualquier modo de transporte.
-* **Exclusion de Filtro para Paradas:**
-  * No se aplica ningun filtro estatico de velocidad o distancia sobre el modo "parada" o paradas fisicas en este dataset, ya que la maquina de estados de nuestro algoritmo de ruteo y clasificacion se encargara de identificar y tratar las paradas de forma dinamica.
+El objetivo es establecer y detallar la metodología de depuración para eliminar glitches de GPS, viajes mal clasificados y colas de inactividad estática, garantizando datos limpios y físicamente realizables para la calibración del clasificador bayesiano en Optuna y el cálculo preciso de emisiones.
 
 ---
 
-## 2. Analisis Fisico por Modo de Transporte (Datos Originales)
+## 1. Criterios de Calidad de Datos y Limpieza Física
 
-A continuacion se presenta la proporcion de pings anomalos detectados originalmente en el dataset de MATLAB usando los criterios basicos de velocidad y espacio:
+Para la depuración de los datos de MATLAB, aplicamos cuatro niveles de limpieza implementados en el script [depurar_datos_matlab.py](file:///C:/Users/Eydan/OneDrive/Escritorio/ITESM/MAITEC%20Lab/Eventos%20Masivos/GPS_Emissions_Project_Pipeline-v2.0/pipeline_v3/calibration_and_diagnostics/gps_survey_data_cleaning/depurar_datos_matlab.py):
 
-| Modo de Transporte | Pings Totales | Pings Anomalos | % Pings Anomalos | % Distancia Afectada | % Tiempo Afectado | Detalles de la Anomalia |
-| :--- | :---: | :---: | :---: | :---: | :---: | :--- |
-| **Caminar** | 184,860 | 14,802 | 8.01% | 44.77% | 0.95% | 8.0% exceden vel. max (>30 km/h), 0.0% glitches GPS |
-| **Carro** | 167,230 | 449 | 0.27% | 12.82% | 0.05% | 0.3% exceden vel. max, 0.3% glitches GPS |
-| **Bus** | 34,705 | 2,631 | 7.58% | 98.55% | 0.92% | 7.6% exceden vel. max, 7.6% glitches GPS |
-| **Metro** | 8,674 | 39 | 0.45% | 7.12% | 0.03% | 0.4% exceden vel. max, 0.4% fuera de vias (>300m) |
-
----
-
-## 2.1 Distribucion de Velocidades en el Modo Caminar
-
-Dado el alto impacto espacial en los datos de Caminar, la distribucion acumulada de velocidades instantaneas sobre los **184,860 pings peatonales** revela lo siguiente:
-
-| Umbral de Velocidad | Pings que lo superan | % Pings Peatonales | Distancia Acumulada (km) | % Distancia de Caminar | Tipo de Incongruencia / Diagnostico |
-| :--- | :---: | :---: | :---: | :---: | :--- |
-| **> 6.0 km/h** | 20,911 | 11.31% | 269.75 km | 52.24% | Trote o carrera ligera |
-| **> 10.0 km/h** | 16,803 | 9.09% | 248.77 km | 48.18% | Velocidad de carrera continua o vehiculo |
-| **> 15.0 km/h** | 16,039 | 8.68% | 244.40 km | 47.33% | Sprint humano limite o vehiculo |
-| **> 25.0 km/h** | 15,598 | 8.44% | 238.28 km | 46.15% | Transito vehicular urbano indudable |
-| **> 30.0 km/h (Umbral)**| 14,802 | 8.01% | 231.15 km | 44.77% | **Vehiculo motorizado indudable (Carro/Bus)** |
-| **> 50.0 km/h** | 2,015 | 1.09% | 90.98 km | 17.62% | Transito vehicular en avenidas/autopistas |
-
-* **Conclusion clave:** El **44.77% de la distancia total** declarada bajo la etiqueta de Caminar ocurrio a velocidades superiores a 30 km/h (y el 46.15% a mas de 25 km/h). Esto confirma que casi la mitad de los datos peatonales corresponden en realidad a trayectos vehiculares (el participante abordo un autobus o automovil pero olvido apagar la grabacion o cambiar la etiqueta manual del viaje).
+*   **Identificación y Descarte de Viajes Corruptos por Duplicidad (Fase 1):**
+    *   Si un viaje presenta más del **2% de sus marcas de tiempo duplicadas**, se cataloga como corrupto (fusión de trayectorias distintas de diferentes dispositivos o fallas de volcado del logger) y se **elimina por completo**.
+    *   Para viajes válidos con duplicidad menor al 2%, se conserva únicamente el primer registro cronológico, eliminando los repetidos.
+*   **Validación Secuencial de Trayectoria (Fase 2 - Path Validation):**
+    *   Para detectar glitches individuales y bloques de teletransportación sin enmascaramiento, se establece el primer punto físicamente válido como ancla (`last_valid`).
+    *   Para cada punto sucesivo, se calcula la distancia y tiempo transcurrido **con respecto al `last_valid`** en lugar del predecesor inmediato. Si la velocidad instantánea excede el límite físico de su modo de transporte (o el límite global de glitch de **250 km/h**), el punto se marca como anómalo y el ancla **NO** se actualiza. Si es coherente, el punto se acepta y se convierte en el nuevo `last_valid`.
+    *   **Límites de velocidad física por modo:**
+        *   **Caminar:** Velocidades superiores a **30 km/h** (este umbral holgado se establece porque el cálculo geodésico Haversine directo punto a punto sobreestima la velocidad real debido al jitter de alta frecuencia del receptor de GPS de 1 Hz).
+        *   **Metro y Autobús (Bus):** Velocidades superiores a **110 km/h** (límite máximo operativo urbano).
+        *   **Automóvil (Carro):** Velocidades superiores a **160 km/h**.
+    *   **Inconsistencia Espacial de Infraestructura (Caso Metro):** Pings clasificados como `metro` que se ubican a más de **300 metros** de la línea oficial de Metrorrey ([lineas_metrorrey.csv](file:///C:/Users/Eydan/OneDrive/Escritorio/ITESM/MAITEC%20Lab/Eventos%20Masivos/GPS_Emissions_Project_Pipeline-v2.0/Inputs/Infrastructure/lineas_metrorrey.csv)) se descartan.
+    *   Si un viaje tiene más del **30% de pings anómalos**, se asume una clasificación errónea general y se descarta todo el viaje.
+*   **Poda de Caminatas Vehicularizadas (Fase 3 - Walking Trip Pruning):**
+    *   Para los viajes de Caminar que no superan el 30% de error total, pero que en algún punto muestran velocidades de vehículo (>30 km/h): se corta el viaje en ese instante exacto. Se conserva la primera parte (caminata lógica) y se elimina el tramo vehicular posterior (donde el usuario abordó un autobús o automóvil pero olvidó detener el registro de caminar).
+*   **Recorte de Extremos Estáticos (Fase 4 - Trim-to-Motion):**
+    *   *El Problema:* Los usuarios activaban el log antes de salir de casa o lo dejaban encendido horas después de llegar y estacionarse, generando largos bloques de pings estáticos al inicio y fin del viaje.
+    *   *Solución:* Se recorta el viaje eliminando los pings estacionarios en los bordes. Escaneamos desde el inicio hacia adelante y desde el final hacia atrás para conservar el viaje únicamente entre el primer y último ping que superen un umbral de movimiento mínimo:
+        *   **Caminar:** Umbral de movimiento de **2.0 km/h**.
+        *   **Carro / Bus / Metro:** Umbral de movimiento de **5.0 km/h**.
+    *   Si ningún ping del viaje supera el umbral (viaje 100% estático) o la porción restante tiene menos de 2 pings, el viaje se descarta por completo.
 
 ---
 
-## 3. Estrategia de Depuracion Aplicada
+## 2. Resultados del Proceso de Depuración Física
 
-Para limpiar el dataset sin introducir suposiciones de reetiquetado (lo que podria sesgar el modelo), se aplica una estrategia de **poda y eliminacion**:
+El proceso de depuración sistemática fue ejecutado sobre el dataset original de MATLAB GPS, arrojando los siguientes resultados estadísticos:
 
-### 3.1 Limpieza a Nivel de Viajes (Misclassified Trips)
-* **Descarte por Fraccion de Error:** Si un viaje (agrupado por `caid` y `num_trip`) presenta **mas del 30% de sus pings originales como anomalos** (por excesos de velocidad en carro/bus/metro o distancia del metro a las vias), se asume que la clasificacion manual de todo el viaje fue incorrecta y se **elimina el viaje completo**.
-* **Descarte de Viajes Vacios o Minimos:** Si tras aplicar la limpieza de puntos un viaje queda con menos de **2 pings**, se elimina por completo para evitar errores de ruteo.
+### Resumen de Pings y Viajes:
+*   **Pings Crudos en el CSV Original:** 398,043 pings (289 viajes)
+*   **Pings en Viajes Corruptos Descartados (Fase 1, Tasa Duplicados >2%):** 79,413 pings (32 viajes descartados)
+*   **Pings tras deduplicación de registros (≤2% duplicados):** 317,699 pings (257 viajes restantes)
+*   **Pings Limpios Guardados Finales:** **177,520 pings** (139 viajes restantes)
+*   **Total de Pings Eliminados en Segunda Fase:** 140,179 pings (44.12% de los pings restantes)
+    *   *Por descarte de viajes completos (inactividad total, vacíos o >30% de error):* 129,121 pings
+    *   *Por poda de caminatas vehicularizadas:* 129,731 pings
+    *   *Por recorte de extremos estáticos (Trim-to-Motion):* 1,947 pings
+    *   *Por glitches individuales en trayectos válidos:* 1,435 pings
+*   **Viajes Completamente Eliminados:** 118 viajes (45.91% de los viajes que pasaron la duplicidad). Esto remueve una enorme cantidad de registros basura que consistían puramente en usuarios estacionados sin movimiento.
+*   **Viajes Peatonales Truncados/Podados:** 127 viajes.
 
-### 3.2 Limpieza a Nivel de Puntos y Poda de Viajes Peatonales (Walking Trip Pruning)
-* **Poda de Caminatas Vehiculares:** Para los viajes de Caminar que no superan el 30% de error total, pero que en algun punto muestran velocidades de vehiculo (>30 km/h):
-  * Se identifica cronologicamente el **primer punto** del viaje donde la velocidad es superior a **30 km/h**.
-  * Se realiza una **poda** (truncado) en ese instante exacto: se **conserva la primera parte** del viaje (trayecto peatonal logico) y se **elimina ese punto y todos los subsecuentes** (segmento donde el participante abordo un vehiculo).
-  * Si la porcion valida restante tiene menos de 2 pings, el viaje se descarta por completo.
-* **Filtro de Glitch GPS Aislado:**
-  * En viajes validos de cualquier modo (incluyendo la porcion valida de las caminatas), los pings individuales marcados como anomalos (por ejemplo, glitches aislados de teletransportacion >250 km/h) son eliminados individualmente.
+### Auditoría de Velocidades Máximas por Modo de Transporte:
+
+| Modo de Transporte | Velocidad Máxima (Original Crudo) | Velocidad Máxima (Con Limpieza) | Velocidad Promedio Limpia | Estado de Limpieza |
+| :--- | :---: | :---: | :---: | :--- |
+| **Caminar** | 2,952.60 km/h | **29.94 km/h** | 2.85 km/h | **100% Físicamente Coherente** |
+| **Carro** | 29,746.20 km/h | **158.47 km/h** | 31.58 km/h | **100% Físicamente Coherente** |
+| **Autobús (Bus)** | 85,296.72 km/h | **109.96 km/h** | 24.04 km/h | **100% Físicamente Coherente** |
+| **Metro** | 4,003.02 km/h | **109.09 km/h** | 31.05 km/h | **100% Físicamente Coherente** |
 
 ---
 
-## 4. Implementacion del Codigo de Depuracion
+## 3. Diagnóstico de Segmentación Temporal (Veraset State Machine vs. Manual)
 
-El proceso ha sido automatizado en el script [depurar_datos_matlab.py](file:///C:/Users/Eydan/OneDrive/Escritorio/ITESM/MAITEC%20Lab/Eventos%20Masivos/GPS_Emissions_Project_Pipeline-v2.0/pipeline_v3/calibration_and_diagnostics/gps_survey_data_cleaning/depurar_datos_matlab.py). 
+Comparamos de manera independiente los registros de viaje manuales de MATLAB frente a la salida del algoritmo de segmentación temporal de Veraset (máquina de estados con $v < 3\text{ km/h}$ y $d < 100\text{ m}$ por más de 5 minutos, definido en [segmentation.py](file:///C:/Users/Eydan/OneDrive/Escritorio/ITESM/MAITEC%20Lab/Eventos%20Masivos/GPS_Emissions_Project_Pipeline-v2.0/pipeline_v3/src/segmentation.py)):
 
-Este codigo:
-1. Lee los datos originales en `Inputs/GPS User Data/Datos de MATLAB GPS.csv`.
-2. Procesa cronologicamente cada viaje para detectar anomalias puntuales y de trayecto.
-3. Aplica los descartes de viajes y la poda de trayectos peatonales vehicularizados.
-4. Elimina las columnas auxiliares creadas para el procesamiento.
-5. Exporta el archivo depurado a `Inputs/GPS User Data/Datos de MATLAB GPS Limpios.csv` en el **mismo formato exacto** (mismas columnas, tipos y orden) para asegurar compatibilidad total con el pipeline principal.
+### 3.1 Presencia de Paradas en los Viajes Manuales
+*   **Viajes manuales con paradas cortas en extremos:** **73.36% (212 viajes)** contienen al menos un ping de parada en sus límites, reflejando el desfase humano menor al encender o apagar la encuesta.
+*   **Viajes manuales con paradas largas internas (>= 5 min):** **20.07% (58 viajes)** de los 289 contienen paradas acumuladas duraderas.
+*   **Sesgo de inactividad:** Para ese 20% de viajes, la inactividad interna promedio fue de **37.45 minutos** (máximo extremo de 492 minutos). Esto demuestra el gran sesgo de inactividad que existe en el dataset manual.
+
+### 3.2 Coincidencia Temporal y Desfases
+*   **Tasa de Emparejamiento:** **99.31%** de los viajes manuales coinciden temporalmente con al menos una sección de viaje del algoritmo.
+*   **IoU (Intersección sobre Unión):** IoU Mediana de **87.58%**, demostrando una alineación temporal muy alta en trayectos regulares.
+*   **Desfase en Tiempos de Inicio:** Mediana de **0.00 minutos** (coincidencia perfecta en el arranque en la mayoría de los casos).
+*   **Desfase en Tiempos de Fin:** Mediana de **0.28 minutos (17 segundos)**, lo cual demuestra que el final de los viajes está sumamente sincronizado en condiciones normales.
+
+---
+
+## 4. Problemática del Trip Splitting e Integración con Optuna
+
+Durante las fases previas del proyecto, se analizó la posibilidad de realizar **Trip Splitting** (dividir un viaje manual en múltiples segmentos activos cuando se detectara una parada intermedia superior a 5 minutos). Sin embargo, se identificaron limitaciones de diseño y se decidió tomar la siguiente ruta para la calibración con Optuna:
+
+### 4.1 Descarte del Trip Splitting
+*   **Ausencia de Etiquetas de Modo:** Si dividimos un viaje manual que originalmente está etiquetado como `Carro` en tres segmentos (Viaje A, Parada de 10 min, Viaje B), no tenemos garantía de que las etiquetas manuales del modo de transporte sigan siendo válidas o uniformes para cada sub-segmento. Por ejemplo, el usuario pudo haber tomado un autobús para el segundo segmento (Viaje B). 
+*   Dividir el viaje arbitrariamente y propagar la etiqueta original generaría **falso ground truth**, contaminando el conjunto de entrenamiento de Optuna.
+
+### 4.2 Solución Implementada: Exclusión de Paradas en la Calibración de Optuna
+*   Dado que las paradas estacionarias intermedias y prolongadas se manejan en producción mediante la máquina de estados espacial y temporal de [segmentation.py](file:///C:/Users/Eydan/OneDrive/Escritorio/ITESM/MAITEC%20Lab/Eventos%20Masivos/GPS_Emissions_Project_Pipeline-v2.0/pipeline_v3/src/segmentation.py) (que asigna IDs negativos a periodos inmóviles), el clasificador bayesiano ([BayesianRouteEvaluator](file:///C:/Users/Eydan/OneDrive/Escritorio/ITESM/MAITEC%20Lab/Eventos%20Masivos/GPS_Emissions_Project_Pipeline-v2.0/pipeline_v3/src/bayes_classifier.py)) no clasifica "paradas", sino que determina el modo de transporte activo (`Carro`, `Bus`, `Metro`, `Caminar`).
+*   Por lo tanto, la base de entrenamiento para la sintonización hiperparamétrica en Optuna **no incluye ni evalúa el estado de parada**. Se extrae únicamente la información de movimiento activo de los viajes depurados para optimizar las 56 probabilidades de las matrices condicionales, minimizando el impacto del sesgo de quietud sobre los parámetros físicos de velocidad y distancia.
+
+---
+
+## 5. El Bug Histórico de la Base de Datos Encontrado
+
+Durante la auditoría del pipeline, se identificó un bug crítico en la lógica previa de limpieza que invalidaba el filtrado de velocidades extremas:
+
+1.  **El bug del tiempo cero (`dt_sec = 0.0`):** Cuando dos pings en el archivo `Datos de MATLAB GPS.csv` tenían exactamente la misma marca de tiempo (`Timestamp`), la diferencia temporal se calculaba como cero. El código anterior interceptaba esta división por cero y le asignaba al ping una velocidad de `0.0 km/h`.
+2.  **La teletransportación oculta:** Esto permitía que saltos espaciales gigantescos (causados por logger freezes o por registros encimados de dos dispositivos con el mismo ID de viaje) se guardaran en el dataset "limpio" con una velocidad ficticia de 0 km/h.
+3.  **Ruptura del ruteo:** Cuando el motor de map matching ordenaba cronológicamente estos puntos sobre la red vial, las velocidades reales de miles de km/h se recalculavam en el grafo de Dijkstra, provocando fallas masivas de ruteo y descalibración de las matrices.
+4.  **Solución:** Ahora se evalúa la tasa de duplicación por viaje, descartando viajes corruptos (>2% duplicados) y conservando únicamente el primer ping por segundo en viajes con tasas menores a 2%.
+
+---
+
+## 6. Sintonización Desacoplada con Optuna
+
+Para entrenar Optuna en menos de 5 segundos evitando la latencia de 1-2 segundos que introduce el cálculo Dijkstra por viaje, implementamos una **arquitectura desacoplada**:
+
+1.  **Fase A (Offline - [generar_datos_entrenamiento.py](file:///C:/Users/Eydan/OneDrive/Escritorio/ITESM/MAITEC%20Lab/Eventos%20Masivos/GPS_Emissions_Project_Pipeline-v2.0/pipeline_v3/calibration_and_diagnostics/modes_matrices_finetuning/generar_datos_entrenamiento.py)):** Carga los datos limpios de MATLAB, realiza el map matching y ruteo una única vez, discretiza las variables de producción y guarda los índices correspondientes en el archivo serializado `datos_entrenamiento_optuna.pkl`.
+2.  **Fase B (Online - [optimizar_matrices_optuna.py](file:///C:/Users/Eydan/OneDrive/Escritorio/ITESM/MAITEC%20Lab/Eventos%20Masivos/GPS_Emissions_Project_Pipeline-v2.0/pipeline_v3/calibration_and_diagnostics/modes_matrices_finetuning/optimizar_matrices_optuna.py)):** Carga el caché precomputado y ejecuta la optimización de Optuna en memoria mediante lookups rápidos de NumPy (`probs_by_mode = Cercania[idx_c] * Velocidad[idx_v]...`).
+
+### Instrucciones de ejecución
+Para regenerar la base de entrenamiento con la sintonización balanceada de 15 viajes por modo (con la nueva limpieza de extremos estáticos activa), ejecuta en tu terminal:
+
+```powershell
+# 1. Limpieza de datos (Fase 1 a 4)
+python pipeline_v3/calibration_and_diagnostics/gps_survey_data_cleaning/depurar_datos_matlab.py
+
+# 2. Generación de caché desacoplado para Optuna (15 viajes balanceados por modo)
+python pipeline_v3/calibration_and_diagnostics/modes_matrices_finetuning/generar_datos_entrenamiento.py --balanced --trips-per-mode 15
+```

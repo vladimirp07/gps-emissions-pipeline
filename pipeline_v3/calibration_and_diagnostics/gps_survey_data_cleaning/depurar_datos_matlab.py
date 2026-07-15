@@ -41,6 +41,28 @@ def main():
     df['Timestamp_parsed'] = pd.to_datetime(df['Timestamp'])
     df['modo_transporte'] = df['mode_of_transport'].str.strip().str.lower()
     
+    # 1. Descartar viajes con más del 2% de duplicados en timestamps (indica viajes corruptos o fusionados)
+    print("Analizando tasa de duplicación de timestamps por viaje...")
+    trips_to_discard = []
+    for (caid, trip_id), group in df.groupby(['caid', 'num_trip']):
+        total_rows = len(group)
+        unique_ts = group['Timestamp_parsed'].nunique()
+        dup_rate = (total_rows - unique_ts) / total_rows
+        if dup_rate > 0.02:
+            print(f"  -> Viaje corrupto descartado: Usuario {caid}, Viaje {trip_id} | Pings: {total_rows}, Duplicación: {dup_rate:.2%}")
+            trips_to_discard.append((caid, trip_id))
+            
+    for caid, trip_id in trips_to_discard:
+        df = df[~((df['caid'] == caid) & (df['num_trip'] == trip_id))]
+        
+    print(f"Total de viajes descartados por duplicidad/corrupción: {len(trips_to_discard)}")
+    print(f"Pings restantes tras descarte: {len(df):,}")
+    
+    # Deduplicar timestamps por usuario y viaje (quedarse con el primero de cada segundo para minorías <= 2%)
+    print("Deduplicando registros con el mismo timestamp por usuario y viaje...")
+    df = df.drop_duplicates(subset=['caid', 'num_trip', 'Timestamp_parsed'], keep='first').reset_index(drop=True)
+    print(f"Pings después de la deduplicación de timestamps: {len(df):,}")
+    
     # Ordenar cronologicamente por usuario, viaje y timestamp para asegurar calculos correctos
     df = df.sort_values(by=['caid', 'num_trip', 'Timestamp_parsed']).reset_index(drop=True)
     
@@ -90,92 +112,147 @@ def main():
     else:
         df['dist_to_tracks_m'] = np.nan
 
-    # Identificar anomalias a nivel de punto
-    print("Evaluando anomalias a nivel de punto...")
-    df['anomalia_velocidad'] = False
-    
-    # Reglas de velocidad maxima por modo de transporte
-    df.loc[(df['modo_transporte'] == 'carro') & (df['speed_kmh'] > 160.0), 'anomalia_velocidad'] = True
-    df.loc[(df['modo_transporte'] == 'bus') & (df['speed_kmh'] > 110.0), 'anomalia_velocidad'] = True
-    df.loc[(df['modo_transporte'] == 'metro') & (df['speed_kmh'] > 110.0), 'anomalia_velocidad'] = True
-    # Nota: El umbral de velocidad para caminar se define en 30 km/h por sobreestimacion de Haversine
-    df.loc[(df['modo_transporte'] == 'caminar') & (df['speed_kmh'] > 30.0), 'anomalia_velocidad'] = True
-    
     # Regla espacial del metro: mas de 300 metros de cualquier via de Metrorrey
     df['anomalia_metro_vias'] = (df['modo_transporte'] == 'metro') & (df['dist_to_tracks_m'] > 300.0)
     
-    # Glitch general: saltos de posicion que requieran velocidad superior a 250 km/h
-    df['anomalia_glitch'] = (df['speed_kmh'] > 250.0)
+    df['es_anomalo'] = df['anomalia_metro_vias']
+    df['anomalia_velocidad'] = False
+    df['anomalia_glitch'] = False
     
-    # Marcador total de anomalia
-    df['es_anomalo'] = df['anomalia_velocidad'] | df['anomalia_metro_vias'] | df['anomalia_glitch']
-    
-    # Evaluar y depurar a nivel de viaje (Trip-Level)
-    print("Evaluando y depurando a nivel de viaje...")
+    # Evaluar y depurar a nivel de viaje (Trip-Level) con validación secuencial de trayectorias
+    print("Evaluando y depurando anomalías de velocidad y viajes...")
     trip_groups = df.groupby(['caid', 'num_trip'])
     
     viajes_descartados = set()
     viajes_prune_count = 0
     puntos_eliminados_prune = 0
     puntos_eliminados_individuales = 0
+    puntos_eliminados_static_ends = 0
     
     keep_indices = []
     
     for (caid, trip_id), group in trip_groups:
         total_pings = len(group)
-        anomalous_pings = group['es_anomalo'].sum()
-        pct_anomalous = (anomalous_pings / total_pings) * 100.0
+        indices = group.index.to_numpy()
         
-        # Criterio A: Descarte completo si mas del 30% de los pings son anomalos
-        if pct_anomalous > 30.0:
+        lats = group['lat'].to_numpy()
+        lons = group['lon'].to_numpy()
+        times = group['Timestamp_parsed'].to_numpy()
+        modes = group['modo_transporte'].to_numpy()
+        es_anomalo_trip = group['es_anomalo'].to_numpy().copy()
+        
+        # Validación secuencial de trayectoria: detecta bloques de glitches de cualquier tamaño en una sola pasada
+        last_valid_idx = -1
+        for i in range(total_pings):
+            if not es_anomalo_trip[i]:
+                last_valid_idx = i
+                break
+                
+        if last_valid_idx != -1:
+            for i in range(last_valid_idx + 1, total_pings):
+                if es_anomalo_trip[i]:
+                    continue
+                    
+                lat1, lon1, t1 = lats[last_valid_idx], lons[last_valid_idx], times[last_valid_idx]
+                lat2, lon2, t2 = lats[i], lons[i], times[i]
+                mode2 = modes[i]
+                
+                dist = haversine_np(lon1, lat1, lon2, lat2) * 1000.0
+                dt = (t2 - t1) / np.timedelta64(1, 's')
+                
+                speed = (dist / 1000.0) / (dt / 3600.0) if dt > 0 else 0.0
+                
+                is_anom = False
+                if mode2 == 'carro' and speed > 160.0:
+                    is_anom = True
+                elif mode2 == 'bus' and speed > 110.0:
+                    is_anom = True
+                elif mode2 == 'metro' and speed > 110.0:
+                    is_anom = True
+                elif mode2 == 'caminar' and speed > 30.0:
+                    is_anom = True
+                elif speed > 250.0:
+                    is_anom = True
+                    
+                if is_anom:
+                    es_anomalo_trip[i] = True
+                else:
+                    last_valid_idx = i
+                    
+        # Propagar es_anomalo al dataframe original para estadísticas finales
+        df.loc[indices, 'es_anomalo'] = es_anomalo_trip
+        
+        # Criterio A: Descarte completo de viaje si supera el 30% de pings anómalos
+        if (es_anomalo_trip.sum() / total_pings) > 0.30:
             viajes_descartados.add((caid, trip_id))
             continue
             
         modo_viaje = group['modo_transporte'].iloc[0]
         
+        # 1. Poda de Caminatas Vehicularizadas (Fase 3 de Caminar)
         if modo_viaje == 'caminar':
-            # Criterio B: Poda de viaje caminar en el primer punto de transicion a vehiculo (> 30 km/h)
-            anomalous_indices = group[group['speed_kmh'] > 30.0].index
+            df_raw_trip = group.copy()
+            df_raw_trip['lon_prev'] = df_raw_trip['lon'].shift(1)
+            df_raw_trip['lat_prev'] = df_raw_trip['lat'].shift(1)
+            df_raw_trip['time_prev'] = df_raw_trip['Timestamp_parsed'].shift(1)
+            df_raw_trip['dist_m'] = haversine_np(df_raw_trip['lon'], df_raw_trip['lat'], df_raw_trip['lon_prev'], df_raw_trip['lat_prev']) * 1000.0
+            df_raw_trip['dt_sec'] = (df_raw_trip['Timestamp_parsed'] - df_raw_trip['time_prev']).dt.total_seconds()
+            df_raw_trip['speed_kmh'] = np.where(df_raw_trip['dt_sec'] > 0, (df_raw_trip['dist_m']/1000.0)/(df_raw_trip['dt_sec']/3600.0), 0.0)
+            
+            anomalous_indices = df_raw_trip[df_raw_trip['speed_kmh'] > 30.0].index
             if not anomalous_indices.empty:
                 first_anom_idx = anomalous_indices[0]
                 pos_in_group = group.index.get_loc(first_anom_idx)
                 
                 # Conservar solo los puntos previos al primer punto de velocidad vehicular
                 group_valid = group.iloc[:pos_in_group]
-                
-                # Descartar el viaje completo si la porcion peatonal valida es muy corta
-                if len(group_valid) < 2:
-                    viajes_descartados.add((caid, trip_id))
-                else:
-                    viajes_prune_count += 1
-                    puntos_eliminados_prune += (total_pings - len(group_valid))
-                    
-                    # Eliminar glitches individuales dentro de la porcion valida de caminar
-                    valid_indices = group_valid[~group_valid['es_anomalo']].index
-                    puntos_eliminados_individuales += (len(group_valid) - len(valid_indices))
-                    
-                    if len(valid_indices) < 2:
-                        viajes_descartados.add((caid, trip_id))
-                    else:
-                        keep_indices.extend(valid_indices)
+                viajes_prune_count += 1
+                puntos_eliminados_prune += (total_pings - len(group_valid))
             else:
-                # No hay velocidad vehicular, remover glitches individuales y verificar tamaño
-                valid_indices = group[~group['es_anomalo']].index
-                puntos_eliminados_individuales += (total_pings - len(valid_indices))
-                
-                if len(valid_indices) < 2:
-                    viajes_descartados.add((caid, trip_id))
-                else:
-                    keep_indices.extend(valid_indices)
+                group_valid = group
         else:
-            # Para modos no peatonales: remover glitches y pings anomalos individuales
-            valid_indices = group[~group['es_anomalo']].index
-            puntos_eliminados_individuales += (total_pings - len(valid_indices))
+            group_valid = group
+
+        # 2. Filtrar glitches individuales (Fase 2)
+        valid_mask_in_group_valid = ~df.loc[group_valid.index, 'es_anomalo']
+        df_valid = group_valid[valid_mask_in_group_valid].copy()
+        
+        # Sumar los glitches eliminados en esta fase
+        glitches_removed = len(group_valid) - len(df_valid)
+        puntos_eliminados_individuales += glitches_removed
+        
+        if len(df_valid) < 2:
+            viajes_descartados.add((caid, trip_id))
+            continue
             
-            if len(valid_indices) < 2:
-                viajes_descartados.add((caid, trip_id))
-            else:
-                keep_indices.extend(valid_indices)
+        # 3. Recorte de Extremos Estáticos (Trim-to-Motion)
+        if modo_viaje == 'caminar':
+            motion_threshold = 2.0  # km/h para caminar
+        else:
+            motion_threshold = 5.0  # km/h para carro, bus, metro
+            
+        motion_pings = df_valid[df_valid['speed_kmh'] >= motion_threshold]
+        
+        if not motion_pings.empty:
+            first_motion_idx = motion_pings.index[0]
+            last_motion_idx = motion_pings.index[-1]
+            
+            pings_before_trim = len(df_valid)
+            df_valid = df_valid.loc[first_motion_idx:last_motion_idx]
+            pings_after_trim = len(df_valid)
+            
+            puntos_eliminados_extremos = pings_before_trim - pings_after_trim
+            if puntos_eliminados_extremos > 0:
+                puntos_eliminados_static_ends += puntos_eliminados_extremos
+        else:
+            viajes_descartados.add((caid, trip_id))
+            continue
+            
+        if len(df_valid) < 2:
+            viajes_descartados.add((caid, trip_id))
+            continue
+            
+        keep_indices.extend(df_valid.index)
                 
     # Filtrar el DataFrame
     df_cleaned = df.loc[keep_indices].copy()
@@ -211,6 +288,7 @@ def main():
     print(f"Total de Pings Eliminados: {total_removed_pings:,} ({total_removed_pings/total_original_pings*100:.2f}%)")
     print(f"  - Por descarte de viajes completos (>30% anomalos o vacios): {pings_viajes_descartados:,}")
     print(f"  - Por poda de caminata (seccion vehicular eliminada): {puntos_eliminados_prune:,}")
+    print(f"  - Por recorte de extremos estaticos (Trim-to-Motion): {puntos_eliminados_static_ends:,}")
     print(f"  - Por glitches individuales en viajes validos: {puntos_eliminados_individuales:,}")
     print(f"Viajes Originales: {total_original_trips:,}")
     print(f"Viajes Completamente Eliminados: {total_removed_trips:,} ({total_removed_trips/total_original_trips*100:.2f}%)")

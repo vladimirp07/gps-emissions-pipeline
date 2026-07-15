@@ -20,7 +20,7 @@ flowchart LR
 
     subgraph Phase3 ["Phase 3: Classification & Estimates"]
         direction TD
-        E["Modal Classification<br>(Bayesian posterior mode prediction)"] --> F["Emissions Estimation<br>(MOVES criteria & GHG calculations)"]
+        E["Modal Classification<br>(ML v4 hierarchical Random Forest)"] --> F["Emissions Estimation<br>(MOVES criteria & GHG calculations)"]
     end
 
     subgraph Phase4 ["Phase 4: Impact Evaluation"]
@@ -43,12 +43,14 @@ flowchart LR
 │   │   ├── config.py              # Relative path and filesystem configurations
 │   │   ├── segmentation.py        # Downsampling, geofencing, and trip partitioning
 │   │   ├── routing.py             # Map-snapping, candidate generation, and network routing (Scenario 8 calibration)
-│   │   ├── bayes_classifier.py    # Prior/posterior classification and infrastructure proximity
+│   │   ├── modal_classification.py # Prior/posterior classification and infrastructure proximity
 │   │   └── emissions.py           # MOVES emission factor matching and calculations
 │   └── calibration_and_diagnostics/ # Subsystem for routing calibration, survey depuration, and bayesian tuning
 │       ├── routing_algorithm_calibration/ # GPS sensitivity analysis and optimal parameters identification
 │       ├── gps_survey_data_cleaning/     # Automated parsing and cleaning of manual MATLAB survey records
-│       └── modes_matrices_finetuning/    # Pre-routing and decoupled Optuna hyperparameter optimization
+│       └── modes_matrices_finetuning/    # Subsystem for modal classification tuning and model training
+│           ├── bayesian_calibration/      # Bayesian matrices calibration using Optuna
+│           └── random_forest_calibration/  # Random Forest hierarchical model training and diagnostics
 ├── legacy/                        # Legacy or baseline pipeline notebooks (e.g., V1 baseline)
 ├── Inputs/                        # Raw inputs (ignored by version control)
 │   ├── Infrastructure/            # OpenStreetMap network graphs, Metro CSV files
@@ -95,3 +97,23 @@ The pipeline generates two main files in `Outputs/Final Outputs/`:
 * **Decoupled Bayes Tuning**: To optimize the Bayesian modal classifier without graph-search overhead during Optuna sweeps, routing features are precomputed using `generar_datos_entrenamiento.py` and evaluated offline in-memory.
 * **Network Continuity**: Pedestrian networks (`G_walk`) can have localized topological disconnections. Gaps can be skipped dynamically via lookahead steps, which may result in localized routing failures.
 * **Emissions Allocation**: Emissions for trips classified as `Bus` are prorated by a default occupancy factor of 25 to estimate passenger-level carbon footprint. Driving trips (`Carro`) calculate total vehicle-level emissions.
+
+## Random Forest Modal Classification (ML v4 Oficial)
+
+The pipeline incorporates a machine learning classifier based on a hierarchical cascade architecture (Random Forest) for transportation mode prediction:
+
+* **Official Classifier Model**: **ML_v4_actual** utilizing 52 baseline variables.
+* **Available Canonical Training Dataset**: The deployed reproducible artifact uses **66 physical trips with a single label and 260 Raw/L1/L2/L3 scenarios**. Mixed-label trips are excluded. Regenerating the cache for all 124 single-label trips is registered as future work and does not block this production release.
+* **Hierarchical Cascade Logic**:
+  1. **NLevel 1**: Caminar (Pedestrian) vs Motorizado (Motorized)
+  2. **NLevel 2**: Metro (Subway) vs Superficie (Road)
+  3. **NLevel 3**: Carro (Car) vs Bus (Bus)
+* **Feature Discarding (Bus Spacing & Persistence)**: 6 experimental variables added to N3 for Bus classification (`stop_cycles_per_km`, `median_stop_spacing_m`, `cv_stop_spacing`, `median_restart_time_s`, `p90_restart_time_s`, `stop_pattern_persistence`) were evaluated via a rigorous 20-fold `StratifiedGroupKFold` cross-validation. They did not show a consistent statistical advantage (yielding a slight accuracy decrease of -0.42%) and were officially discarded from production.
+* **Production Quality Guardrail**: In live inference, trips must satisfy:
+  - **Pings efectivos >= 15**
+  - **Porcentaje conservado (efectivo/bruto) >= 30%**
+  If these are not met, the evaluator aborts classification and returns `"Calidad insuficiente"`.
+* **Archived Experiments**: Previous diagnostic files, intermediate plots, and comparison spreadsheets are moved to the `archive/random_forest_experiments/` folder.
+* **Runtime Selection**: `RandomForestRouteEvaluator` is the default classifier. Bayes is retained only through the explicit `ENABLE_BAYES_FALLBACK` configuration switch, disabled by default.
+* **Immutable Inference**: Runtime inference only loads and validates `random_forest_modal.pkl`; it never trains or overwrites a model.
+* **Manifest**: `Inputs/GPS User Data/random_forest_modal.manifest.json` records hashes, feature contract, dataset scope, dependency version and hyperparameters.

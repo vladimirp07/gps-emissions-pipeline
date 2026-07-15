@@ -9,11 +9,10 @@ import shapely.wkt
 from pathlib import Path
 
 # Agregar la raiz del proyecto al path
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+PROJECT_ROOT = Path(__file__).resolve().parents[4]
 sys.path.append(str(PROJECT_ROOT))
-
-from pipeline_v3.src.routing import get_candidates_vectorized, complete_route_v1_optimized
-from pipeline_v3.src.bayes_classifier import PriorModeClassifier, calcular_cercania_infraestructura
+from pipeline_v3.src.routing import get_candidates_vectorized, complete_route_v2_optimized
+from pipeline_v3.src.modal_classification import PriorModeClassifier, calcular_cercania_infraestructura
 from pipeline_v3.src import config
 
 def haversine_np(lon1, lat1, lon2, lat2):
@@ -124,6 +123,10 @@ def main():
     
     bus_routes = gpd.read_file(config.FILE_BUS)
     
+    print("Precomputando geometrías unificadas de infraestructura...")
+    metro_union = geometry_metro_proj.unary_union
+    bus_union = bus_routes.to_crs("EPSG:32614").unary_union
+    
     # Cargar dataset de MATLAB limpio
     clean_matlab_path = config.GPS_DIR / "Datos de MATLAB GPS Limpios.csv"
     print(f"Cargando dataset de MATLAB limpio: {clean_matlab_path}")
@@ -149,17 +152,61 @@ def main():
         'L3': degradar_nivel_3
     }
     
-    # Configurar límite opcional para pruebas rápidas
+    # Configurar límite opcional para pruebas rápidas o balanceadas
     import argparse
     parser = argparse.ArgumentParser(description="Generar datos de entrenamiento para Optuna.")
     parser.add_argument("--limit", type=int, default=None, help="Límite del número de viajes a procesar (para pruebas rápidas).")
+    parser.add_argument("--balanced", action="store_true", default=False, help="Selecciona una muestra balanceada de viajes por modo de transporte.")
+    parser.add_argument("--trips-per-mode", type=int, default=15, help="Número de viajes a seleccionar por cada modo si --balanced está activo.")
+    parser.add_argument("--chunk-id", type=int, default=None, help="ID del chunk a procesar (0 a num-chunks - 1).")
+    parser.add_argument("--num-chunks", type=int, default=None, help="Número total de chunks en paralelo.")
     args, unknown = parser.parse_known_args()
     
     # Agrupar por usuario, viaje y modo real
     groups = df_all.groupby(['caid', 'trip', 'modo_transporte'])
     total_groups = len(groups)
     
-    if args.limit is not None:
+    if args.balanced:
+        print(f"Modo balanceado activo. Seleccionando los {args.trips_per_mode} viajes más cortos dentro de los rangos representativos...")
+        selected_keys = []
+        modes_groups = {}
+        # Rangos representativos reales ampliados (bus y metro ensanchados para capturar >= 15 y 7 respectivamente)
+        mode_ranges = {
+            'caminar': (100, 600),
+            'carro': (300, 1200),
+            'bus': (50, 5000),
+            'metro': (100, 5000)
+        }
+        for key, df_trip in groups:
+            modo = key[2].strip().lower()
+            if modo not in mode_ranges:
+                continue
+            min_p, max_p = mode_ranges[modo]
+            if len(df_trip) < min_p or len(df_trip) > max_p:
+                continue
+            if modo not in modes_groups:
+                modes_groups[modo] = []
+            modes_groups[modo].append((key, df_trip))
+            
+        for modo, trips_list in modes_groups.items():
+            # Ordenar por longitud de viaje (número de pings)
+            trips_list = sorted(trips_list, key=lambda x: len(x[1]))
+            chosen_for_mode = trips_list[:args.trips_per_mode]
+            
+            seen_users = {key[0] for key, _ in chosen_for_mode}
+            print(f"  -> {modo.capitalize()}: Seleccionados {len(chosen_for_mode)} viajes representativos (Usuarios: {sorted(list(seen_users))}, Pings mín: {len(chosen_for_mode[0][1])}, Pings máx: {len(chosen_for_mode[-1][1]) if chosen_for_mode else 0})")
+            selected_keys.extend(chosen_for_mode)
+            
+        groups_list = selected_keys
+
+    # Lógica de división por chunks paralelos
+    if args.chunk_id is not None and args.num_chunks is not None:
+        chunk_size = int(np.ceil(len(groups_list) / args.num_chunks))
+        start_idx = args.chunk_id * chunk_size
+        end_idx = min(len(groups_list), (args.chunk_id + 1) * chunk_size)
+        groups_list = groups_list[start_idx:end_idx]
+        print(f"\n[RUN] PROCESANDO CHUNK {args.chunk_id}/{args.num_chunks} (Viajes {start_idx} a {end_idx - 1}, total de este chunk: {len(groups_list)}).")
+    elif args.limit is not None:
         print(f"Modo de prueba activo. Se limitará el procesamiento a los primeros {args.limit} viajes.")
         groups_list = list(groups)[:args.limit]
     else:
@@ -197,15 +244,27 @@ def main():
             if len(df_deg) < 2:
                 continue
                 
+            # Recalcular distancias y velocidades para el conjunto degradado
+            df_deg['lon_prev'] = df_deg['longitude'].shift(1)
+            df_deg['lat_prev'] = df_deg['latitude'].shift(1)
+            df_deg['dis lineal [m]'] = haversine_np(df_deg['longitude'], df_deg['latitude'], df_deg['lon_prev'], df_deg['lat_prev']) * 1000.0
+            df_deg['dis lineal [m]'] = df_deg['dis lineal [m]'].fillna(0.0)
+            
+            df_deg['time_prev'] = df_deg['local_timestamp'].shift(1)
+            df_deg['dt_sec'] = (df_deg['local_timestamp'] - df_deg['time_prev']).dt.total_seconds().fillna(0.0)
+            df_deg['Speed [km/h]'] = np.where(
+                df_deg['dt_sec'] > 0,
+                (df_deg['dis lineal [m]'] / 1000.0) / (df_deg['dt_sec'] / 3600.0),
+                0.0
+            )
+            
             # Proximidad espacial cruda (para la heuristica del Prior)
             gdf_pts = gpd.GeoDataFrame(df_deg, geometry=gpd.points_from_xy(df_deg['longitude'], df_deg['latitude']), crs="EPSG:4326")
             gdf_pts_proj = gdf_pts.to_crs("EPSG:32614")
             
-            metro_union = geometry_metro_proj.unary_union
             dist_metro = gdf_pts_proj.distance(metro_union)
             near_subway = dist_metro < 50.0
             
-            bus_union = bus_routes.to_crs("EPSG:32614").unary_union
             dist_bus = gdf_pts_proj.distance(bus_union)
             near_bus = dist_bus < 50.0
             
@@ -225,8 +284,8 @@ def main():
                         edges_walk, gdf_pts_proj_edges, buffer_m=WALK_BUFFER_M
                     )
                     
-                    # Llamada al Ruteador principal
-                    df_routed = complete_route_v1_optimized(
+                    # Llamada al Ruteador principal (V2 con Dijkstra progresivo)
+                    df_routed = complete_route_v2_optimized(
                         id=caid,
                         registros_person=df_deg,
                         G_drive=G_drive,
@@ -282,14 +341,16 @@ def main():
                         label = modo_real.capitalize()
                     
                     registros_entrenamiento.append({
-                        'trip_id': f"{caid}_{trip_id}_{deg_name}_{modo_hip.lower()}",
+                        'trip_id': f"{caid}_{trip_id}-{label}_{deg_name}_{modo_hip.lower()}",
                         'label': label,
                         'modo_hipotesis': modo_hip.lower(),
                         'degradacion': deg_name,
                         'idx_c': np.array(idx_c, dtype=np.int32),
                         'idx_v': np.array(idx_v, dtype=np.int32),
                         'idx_d_arr': np.array(idx_d_arr, dtype=np.int32),
-                        'idx_vp_arr': np.array(idx_vp_arr, dtype=np.int32)
+                        'idx_vp_arr': np.array(idx_vp_arr, dtype=np.int32),
+                        'speed_raw': df_routed['Speed [km/h]'].fillna(0.0).to_numpy(dtype=np.float32),
+                        'highway_raw': list(df_routed['highway'].fillna('unclassified').values)
                     })
                     
                 except Exception:
@@ -301,7 +362,10 @@ def main():
             print(f" -> Procesados {processed_trips}/{len(groups_list)} viajes (Tiempo transcurrido: {elapsed:.1f}s, Muestras guardadas: {len(registros_entrenamiento)})")
             
     # Guardar los datos en formato pickle
-    output_pkl = config.GPS_DIR / "datos_entrenamiento_optuna.pkl"
+    if args.chunk_id is not None:
+        output_pkl = config.GPS_DIR / f"datos_entrenamiento_optuna_chunk_{args.chunk_id}.pkl"
+    else:
+        output_pkl = config.GPS_DIR / "datos_entrenamiento_optuna.pkl"
     
     print(f"\nGuardando {len(registros_entrenamiento)} muestras de entrenamiento ruteadas en: {output_pkl}")
     with open(output_pkl, 'wb') as f:

@@ -14,18 +14,22 @@ def calcular_cercania_infraestructura(df, subway_routes, bus_routes):
     gdf_pts = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.longitude, df.latitude), crs="EPSG:4326")
     gdf_pts = gdf_pts.to_crs("EPSG:32614")
     
-    RADIO_BUSQUEDA_METROS = 50
+    subway_proj = subway_routes.to_crs("EPSG:32614") if subway_routes.crs != "EPSG:32614" else subway_routes
+    bus_proj = bus_routes.to_crs("EPSG:32614") if bus_routes.crs != "EPSG:32614" else bus_routes
+    
+    RADIO_METRO = 50
+    RADIO_BUS = 20
     
     # 2. Búsqueda Espacial Exacta (sjoin_nearest mide a la LÍNEA, no al centroide)
     # --- METRO ---
-    metro_join = gpd.sjoin_nearest(gdf_pts, subway_routes, how='left', distance_col='dist_metro')
+    metro_join = gpd.sjoin_nearest(gdf_pts, subway_proj, how='left', distance_col='dist_metro')
     metro_join = metro_join[~metro_join.index.duplicated(keep='first')] # Limpiar empates de distancia
-    df['near_subway_line'] = (metro_join['dist_metro'] < RADIO_BUSQUEDA_METROS).astype(int)
+    df['near_subway_line'] = (metro_join['dist_metro'] < RADIO_METRO).astype(int)
     
     # --- BUS ---
-    bus_join = gpd.sjoin_nearest(gdf_pts, bus_routes, how='left', distance_col='dist_bus')
+    bus_join = gpd.sjoin_nearest(gdf_pts, bus_proj, how='left', distance_col='dist_bus')
     bus_join = bus_join[~bus_join.index.duplicated(keep='first')] 
-    df['near_bus_route'] = (bus_join['dist_bus'] < RADIO_BUSQUEDA_METROS).astype(int)
+    df['near_bus_route'] = (bus_join['dist_bus'] < RADIO_BUS).astype(int)
     
     return df
 
@@ -118,29 +122,121 @@ class BayesianRouteEvaluator:
         
         # Matrices de Probabilidad Condicional originales del artículo de investigación
         self.Cercania = np.array([
-            [0.10, 0.10, 0.80, 0.00],  # Cerca de estación de metro (índice 0)
-            [0.10, 0.80, 0.00, 0.10],  # Cerca de ruta de autobús (índice 1)
-            [0.40, 0.25, 0.05, 0.30]   # Sin infraestructura cerca (índice 2)
+            [0.0396, 0.0099, 0.9354, 0.0150],
+            [0.0098, 0.0613, 0.0098, 0.9191],
+            [0.0231, 0.0099, 0.0122, 0.9547],
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
         ])
 
         self.Velocidad = np.array([
-            [0.05, 0.10, 0.15, 0.60],  # Velocidad instantánea <= 6.0 km/h
-            [0.47, 0.38, 0.05, 0.10],  # 6.0 < Velocidad <= 20.0 km/h
-            [0.50, 0.30, 0.20, 0.00],  # 20.0 < Velocidad <= 80.0 km/h
-            [1.00, 0.00, 0.00, 0.00]   # Velocidad > 80.0 km/h
+            [0.0457, 0.0099, 0.8942, 0.0501],
+            [0.7629, 0.0199, 0.0099, 0.2073],
+            [0.2317, 0.0099, 0.7464, 0.0120],
+            [0.8739, 0.0098, 0.1065, 0.0098],
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
         ])
 
         self.Distancia = np.array([
-            [0.10, 0.20, 0.30, 0.40],  # Distancia de viaje <= 1.0 km
-            [0.25, 0.25, 0.30, 0.20],  # 1.0 < Distancia <= 6.0 km
-            [0.40, 0.15, 0.25, 0.20],  # 6.0 < Distancia <= 10.0 km
-            [0.60, 0.30, 0.00, 0.10],  # 10.0 < Distancia <= 18.0 km
-            [0.40, 0.40, 0.00, 0.20]   # Distancia > 18.0 km
+            [0.4232, 0.4261, 0.1132, 0.0375],
+            [0.0099, 0.7101, 0.0707, 0.2093],
+            [0.7451, 0.2252, 0.0173, 0.0124],
+            [0.1364, 0.5562, 0.2896, 0.0178],
+            [0.0099, 0.9563, 0.0099, 0.0239],
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
         ])
 
         self.Velprom = np.array([
-            [0.10, 0.10, 0.20, 0.60],  # Velocidad promedio viaje <= 6.0 km/h
-            [0.40, 0.25, 0.25, 0.10]   # Velocidad promedio viaje > 6.0 km/h
+            [0.3825, 0.0725, 0.0222, 0.5228],
+            [0.7861, 0.1943, 0.0098, 0.0098],
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
         ])
 
     def evaluate_completed_route_with_matrices(self, df_routed, mode_hypothesis, subway_routes, bus_routes):
@@ -210,7 +306,7 @@ class BayesianRouteEvaluator:
         
         return pd.Series(total_votes_normalized, index=self.modos)
 
-    def _resolve_car_vs_bus(self, df_routed, subway_routes, bus_routes):
+    def _resolve_car_vs_bus(self, df_routed, subway_routes, bus_routes, threshold_bus=0.70):
         """
         Sub-clasificación posterior para discriminar entre Carro y Bus una vez que se ha
         determinado que el viaje se realizó por la red vial motorizada (road_motorized).
@@ -244,8 +340,10 @@ class BayesianRouteEvaluator:
             
         prob_vector_road = self.evaluate_completed_route_with_matrices(df_eval, 'Carro', subway_routes, bus_routes)
         
-        # Si la probabilidad bayesiana de Bus es superior a la de Carro:
-        if prob_vector_road['Bus'] > prob_vector_road['Carro']:
+        # Calcular porcentaje de cobertura sobre la red de autobuses
+        fraction_near_bus = df_eval['near_bus_route'].mean() if not df_eval.empty else 0.0
+        
+        if prob_vector_road['Bus'] > prob_vector_road['Carro'] and fraction_near_bus >= threshold_bus:
             return 'Bus'
         else:
             return 'Carro'

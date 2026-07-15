@@ -3,7 +3,7 @@
 Este directorio agrupa los módulos, scripts y especificaciones técnicas dedicados a la calibración de parámetros espaciales, validación de la calidad de los datos de entrada y optimización probabilística del pipeline v3. Su diseño permite aislar estas actividades experimentales del flujo operativo de producción (`src/` y `orchestrator.ipynb`), facilitando auditorías de datos y análisis de sensibilidad sin alterar la integridad del sistema principal.
 
 ---
-
+modes_matrices_finetuning
 ## 1. Arquitectura y Módulos Componentes
 
 El directorio se divide en tres subsistemas funcionales especializados:
