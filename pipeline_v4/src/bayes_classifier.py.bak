@@ -1,0 +1,396 @@
+import numpy as np
+import pandas as pd
+import geopandas as gpd
+
+def calcular_cercania_infraestructura(df, subway_routes, bus_routes):
+    """
+    Calcula la proximidad espacial (distancia métrica exacta) de cada ping GPS
+    a las líneas físicas del metro y rutas de autobús oficiales.
+    """
+    if df.empty:
+        return df.copy()
+        
+    # 1. Proyectar temporalmente a UTM 14N (EPSG:32614)
+    gdf_pts = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.longitude, df.latitude), crs="EPSG:4326")
+    gdf_pts = gdf_pts.to_crs("EPSG:32614")
+    
+    subway_proj = subway_routes.to_crs("EPSG:32614") if subway_routes.crs != "EPSG:32614" else subway_routes
+    bus_proj = bus_routes.to_crs("EPSG:32614") if bus_routes.crs != "EPSG:32614" else bus_routes
+    
+    RADIO_METRO = 50
+    RADIO_BUS = 20
+    
+    # 2. Búsqueda Espacial Exacta (sjoin_nearest mide a la LÍNEA, no al centroide)
+    # --- METRO ---
+    metro_join = gpd.sjoin_nearest(gdf_pts, subway_proj, how='left', distance_col='dist_metro')
+    metro_join = metro_join[~metro_join.index.duplicated(keep='first')] # Limpiar empates de distancia
+    df['near_subway_line'] = (metro_join['dist_metro'] < RADIO_METRO).astype(int)
+    
+    # --- BUS ---
+    bus_join = gpd.sjoin_nearest(gdf_pts, bus_proj, how='left', distance_col='dist_bus')
+    bus_join = bus_join[~bus_join.index.duplicated(keep='first')] 
+    df['near_bus_route'] = (bus_join['dist_bus'] < RADIO_BUS).astype(int)
+    
+    return df
+
+class PriorModeClassifier:
+    """
+    Clasificador de Prior Modal y Heurísticas de Filtrado.
+    Calcula priors heurísticos y realiza el descarte/poda de hipótesis imposibles
+    utilizando variables baratas derivadas directamente del GPS crudo (sin ruteo).
+    """
+    def __init__(self, max_walk_speed=22.0, max_walk_dist=15.0):
+        self.max_walk_speed = max_walk_speed
+        self.max_walk_dist = max_walk_dist
+
+
+    def prune_impossible_hypotheses(self, df_trip, near_subway, near_bus):
+        """
+        Poda (filtra) hipótesis imposibles para ahorrar costes de ruteo.
+        
+        Retorna la lista de modos candidatos simplificados que requieren ruteo:
+        - 'Caminar' (si es viable físicamente)
+        - 'Metro' (si es viable físicamente y hay cercanía al metro)
+        - 'Carro' (representando la red vial común o 'road_motorized')
+        
+        Nota metodológica: 'Bus' no se rutea de manera independiente para evitar
+        duplicar coste computacional sobre la misma red vial (G_drive). Si la hipótesis
+        vial gana, se discriminará 'Carro' vs 'Bus' en el paso posterior.
+        """
+        max_speed = df_trip['Speed [km/h]'].max()
+        total_dist_km = df_trip['dis lineal [m]'].sum() / 1000.0
+        
+        candidates = []
+        
+        # 1. Chequeo de Caminar
+        if max_speed <= self.max_walk_speed and total_dist_km <= self.max_walk_dist:
+            candidates.append('Caminar')
+            
+        # 2. Chequeo de Metro
+        if near_subway.any() and total_dist_km > 1.0:
+            candidates.append('Metro')
+            
+        # 3. Chequeo de Motorizado Vial (Carro / Bus)
+        # Se rutea bajo el candidato genérico 'Carro' (road_motorized)
+        if max_speed > 3.0 or total_dist_km > 0.5:
+            candidates.append('Carro')
+            
+        # Salvaguarda: al menos un candidato
+        if not candidates:
+            candidates = ['Carro']
+            
+        return candidates
+
+    def predict_candidates(self, df_trip, near_subway, near_bus):
+        """Método obsoleto (deprecated) mantenido por compatibilidad hacia atrás."""
+        return self.prune_impossible_hypotheses(df_trip, near_subway, near_bus)
+
+
+class BayesianRouteEvaluator:
+    """
+    Evaluador Bayesiano Posterior de Rutas.
+    Clasifica las hipótesis de ruteo completadas utilizando métricas físicas
+    corregidas (velocidad de calle, distancia topológica) y cercanía a infraestructura,
+    contrastadas contra las matrices probabilísticas del paper.
+    """
+    def __init__(self):
+        self.modos = ['Carro', 'Bus', 'Metro', 'Caminar']
+        
+        # Intentar cargar cachés precomputadas de infraestructura para optimización espacial
+        import pickle
+        from pathlib import Path
+        
+        current_dir = Path(__file__).resolve().parent
+        project_root = current_dir.parents[1]  # pipeline_v4/src/ -> dos niveles arriba
+        cache_dir = project_root / "Inputs" / "Infrastructure" / "Cache_Optimizado"
+        
+        cache_file_drive = cache_dir / "drive_infra_cache.pkl"
+        cache_file_walk = cache_dir / "walk_infra_cache.pkl"
+        
+        if cache_file_drive.exists() and cache_file_walk.exists():
+            try:
+                with open(cache_file_drive, 'rb') as f:
+                    self.drive_infra_cache = pickle.load(f)
+                with open(cache_file_walk, 'rb') as f:
+                    self.walk_infra_cache = pickle.load(f)
+            except Exception:
+                self.drive_infra_cache = None
+                self.walk_infra_cache = None
+        else:
+            self.drive_infra_cache = None
+            self.walk_infra_cache = None
+        
+        # Matrices de Probabilidad Condicional originales del artículo de investigación
+        self.Cercania = np.array([
+            [0.0396, 0.0099, 0.9354, 0.0150],
+            [0.0098, 0.0613, 0.0098, 0.9191],
+            [0.0231, 0.0099, 0.0122, 0.9547],
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        ])
+
+        self.Velocidad = np.array([
+            [0.0457, 0.0099, 0.8942, 0.0501],
+            [0.7629, 0.0199, 0.0099, 0.2073],
+            [0.2317, 0.0099, 0.7464, 0.0120],
+            [0.8739, 0.0098, 0.1065, 0.0098],
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        ])
+
+        self.Distancia = np.array([
+            [0.4232, 0.4261, 0.1132, 0.0375],
+            [0.0099, 0.7101, 0.0707, 0.2093],
+            [0.7451, 0.2252, 0.0173, 0.0124],
+            [0.1364, 0.5562, 0.2896, 0.0178],
+            [0.0099, 0.9563, 0.0099, 0.0239],
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        ])
+
+        self.Velprom = np.array([
+            [0.3825, 0.0725, 0.0222, 0.5228],
+            [0.7861, 0.1943, 0.0098, 0.0098],
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        ])
+
+    def evaluate_completed_route_with_matrices(self, df_routed, mode_hypothesis, subway_routes, bus_routes):
+        """
+        Evalúa una hipótesis de ruta ya calculada a través de las matrices bayesianas del paper.
+        Retorna la distribución de probabilidad a posteriori para los 4 modos en esta hipótesis.
+        """
+        if df_routed.empty:
+            return pd.Series([0.0, 0.0, 0.0, 0.0], index=self.modos)
+
+        df_eval = df_routed.copy()
+        
+        # Intentar usar el caché precalculado si está cargado y el ruteo contiene nodos válidos
+        if self.drive_infra_cache is not None and self.walk_infra_cache is not None:
+            is_walk = (str(mode_hypothesis).lower() == 'caminar')
+            cache = self.walk_infra_cache if is_walk else self.drive_infra_cache
+            
+            near_subway_list = []
+            near_bus_list = []
+            
+            if 'start_node' not in df_eval.columns or 'end_node' not in df_eval.columns or (df_eval['start_node'] == 'N/A').all():
+                df_eval = calcular_cercania_infraestructura(df_eval, subway_routes, bus_routes)
+            else:
+                for u, v in zip(df_eval['start_node'], df_eval['end_node']):
+                    res = cache.get((u, v))
+                    if res is None:
+                        res = cache.get((v, u), (0, 0))
+                    near_subway_list.append(res[0])
+                    near_bus_list.append(res[1])
+                df_eval['near_subway_line'] = near_subway_list
+                df_eval['near_bus_route'] = near_bus_list
+        else:
+            # Fallback a sjoin_nearest en runtime si no hay caché
+            df_eval = calcular_cercania_infraestructura(df_eval, subway_routes, bus_routes)
+
+        # 1. Índice de Cercanía: 0 (Metro), 1 (Bus), 2 (Ninguno)
+        idx_c = np.where(df_eval['near_subway_line'] == 1, 0,
+                np.where(df_eval['near_bus_route'] == 1, 1, 2))
+
+        # 2. Índice de Velocidad por punto corregido
+        idx_v = np.digitize(df_eval['Speed [km/h]'].fillna(0), bins=[6.001, 20.001, 80.001])
+
+        # 3. Índice de Distancia física acumulada de ruteo
+        total_dist_km = df_eval['distance_m'].sum() / 1000.0
+        idx_d = np.digitize([total_dist_km], bins=[1.0, 6.001, 10.001, 18.001])[0]
+        idx_d_arr = np.repeat(idx_d, len(df_eval))
+
+        # 4. Índice de Velocidad promedio de ruta
+        avg_speed_trip = df_eval['Speed [km/h]'].mean()
+        idx_vp = np.digitize([avg_speed_trip], bins=[6.001])[0]
+        idx_vp_arr = np.repeat(idx_vp, len(df_eval))
+
+        # 5. Multiplicación Bayesiana
+        P_unnorm = (self.Cercania[idx_c] * 
+                    self.Velocidad[idx_v] * 
+                    self.Distancia[idx_d_arr] * 
+                    self.Velprom[idx_vp_arr])
+
+        # 6. Normalización por puntos
+        suma_puntos = P_unnorm.sum(axis=1, keepdims=True)
+        suma_puntos[suma_puntos == 0] = 1
+        P_norm = P_unnorm / suma_puntos
+
+        # 7. Votación acumulada de viaje
+        total_votes = P_norm.sum(axis=0)
+        total_votes_normalized = total_votes / (total_votes.sum() + 1e-9)
+        
+        return pd.Series(total_votes_normalized, index=self.modos)
+
+    def _resolve_car_vs_bus(self, df_routed, subway_routes, bus_routes, threshold_bus=0.70):
+        """
+        Sub-clasificación posterior para discriminar entre Carro y Bus una vez que se ha
+        determinado que el viaje se realizó por la red vial motorizada (road_motorized).
+        
+        Usa variables contextuales y topológicas de alta fidelidad:
+        1. Cercanía espacial a rutas de bus a lo largo de la trayectoria.
+        2. Patrón de paradas de bus / velocidad promedio de ruteo.
+        3. Matrices de probabilidad bayesianas evaluadas sobre la ruta motorizada.
+        """
+        df_eval = df_routed.copy()
+        
+        # Intentar usar el caché precalculado si está cargado y el ruteo contiene nodos válidos
+        if self.drive_infra_cache is not None:
+            cache = self.drive_infra_cache
+            near_subway_list = []
+            near_bus_list = []
+            
+            if 'start_node' not in df_eval.columns or 'end_node' not in df_eval.columns or (df_eval['start_node'] == 'N/A').all():
+                df_eval = calcular_cercania_infraestructura(df_eval, subway_routes, bus_routes)
+            else:
+                for u, v in zip(df_eval['start_node'], df_eval['end_node']):
+                    res = cache.get((u, v))
+                    if res is None:
+                        res = cache.get((v, u), (0, 0))
+                    near_subway_list.append(res[0])
+                    near_bus_list.append(res[1])
+                df_eval['near_subway_line'] = near_subway_list
+                df_eval['near_bus_route'] = near_bus_list
+        else:
+            df_eval = calcular_cercania_infraestructura(df_eval, subway_routes, bus_routes)
+            
+        prob_vector_road = self.evaluate_completed_route_with_matrices(df_eval, 'Carro', subway_routes, bus_routes)
+        
+        # Calcular porcentaje de cobertura sobre la red de autobuses
+        fraction_near_bus = df_eval['near_bus_route'].mean() if not df_eval.empty else 0.0
+        
+        if prob_vector_road['Bus'] > prob_vector_road['Carro'] and fraction_near_bus >= threshold_bus:
+            return 'Bus'
+        else:
+            return 'Carro'
+
+    def select_final_mode(self, hypotheses, subway_routes, bus_routes):
+        """
+        Compara y evalúa todas las hipótesis de ruteo completadas y selecciona la óptima.
+        
+        Pasos metodológicos:
+        1. Evalúa la probabilidad a posteriori de cada hipótesis ('Caminar', 'Metro', 'Carro')
+           usando sus respectivas geometrías ruteadas.
+        2. Determina el modo ganador en base a la probabilidad de su propia hipótesis.
+        3. Si la hipótesis vial ganadora es 'Carro' (road_motorized), realiza la sub-clasificación
+           posterior 'Carro vs Bus' para no duplicar el costo del ruteo.
+        """
+        best_mode = None
+        best_probability = -1.0
+        best_df = None
+        diagnostic_probs = {}
+
+        # Evaluar candidatos ruteados (Caminar, Metro, Carro/Road_Motorized)
+        for mode, df_routed in hypotheses.items():
+            prob_vector = self.evaluate_completed_route_with_matrices(df_routed, mode, subway_routes, bus_routes)
+            # Evaluamos la probabilidad del modo bajo su propia hipótesis de ruteo
+            prob_self = prob_vector[mode]
+            diagnostic_probs[mode] = prob_vector.to_dict()
+            
+            if prob_self > best_probability:
+                best_probability = prob_self
+                best_mode = mode
+                best_df = df_routed
+
+        # Sub-clasificación final para vehículos de carretera (Carro vs Bus)
+        if best_mode == 'Carro' and 'Carro' in hypotheses:
+            resolved_mode = self._resolve_car_vs_bus(hypotheses['Carro'], subway_routes, bus_routes)
+            if resolved_mode == 'Bus':
+                best_mode = 'Bus'
+                best_df = best_df.copy()
+                best_df['modo_transporte'] = 'Bus'
+
+        return best_mode, best_df, best_probability, diagnostic_probs
+
+    def evaluate_hypothesis(self, df_routed, mode_hypothesis, subway_routes, bus_routes):
+        """Método obsoleto (deprecated) mantenido por compatibilidad hacia atrás."""
+        return self.evaluate_completed_route_with_matrices(df_routed, mode_hypothesis, subway_routes, bus_routes)
+
+    def select_best_hypothesis(self, hypotheses, subway_routes, bus_routes):
+        """Método obsoleto (deprecated) mantenido por compatibilidad hacia atrás."""
+        return self.select_final_mode(hypotheses, subway_routes, bus_routes)
+

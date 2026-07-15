@@ -61,7 +61,7 @@ legacy/
 /Inputs/GPS User Data/metricas_rf_baseline_sklearn180.json
 /Inputs/GPS User Data/metricas_rf_expanded_candidate.json
 /archive/random_forest_experiments/*.csv
-/pipeline_v3/calibration_and_diagnostics/routing_algorithm_calibration/*.csv
+/pipeline_v4/calibration_and_diagnostics/routing_algorithm_calibration/*.csv
 
 # 4. Local IDE Configuration
 .vscode/
@@ -92,5 +92,5 @@ visual_content/
 **/*matriz_confusion*.png
 
 # 8. Local Calibration Experiments Images & Figures
-pipeline_v3/calibration_and_diagnostics/routing_algorithm_calibration/*/*.png
-pipeline_v3/calibration_and_diagnostics/routing_algorithm_calibration/*.png
+pipeline_v4/calibration_and_diagnostics/routing_algorithm_calibration/*/*.png
+pipeline_v4/calibration_and_diagnostics/routing_algorithm_calibration/*.png

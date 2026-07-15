@@ -16,7 +16,7 @@
     "datos_entrenamiento_ml.pkl": "0c42a999b20e0a0bb0caf55cb6584bdf655352ca4613fe4d986dc535d0ebb22b",
     "random_forest_modal.pkl": "c485216fb04205612474e4e9d42076a5bcc0ead525737d5a959adb53b3961154"
   },
-  "feature_contract": "pipeline_v3/src/random_forest_contract.py::RF_FEATURES",
+  "feature_contract": "pipeline_v4/src/random_forest_contract.py::RF_FEATURES",
   "feature_count": 52,
   "feature_order": [
     "drive_mean_speed", "drive_max_speed", "drive_std_speed", "drive_stop_frac",
@@ -57,3 +57,4 @@
     "minimum_percent_conserved": 30.0
   }
 }
+

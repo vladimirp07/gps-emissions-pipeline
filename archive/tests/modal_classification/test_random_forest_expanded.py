@@ -4,8 +4,8 @@ import pickle
 import unittest
 from pathlib import Path
 
-from pipeline_v3.src.modal_classification import RandomForestRouteEvaluator
-from pipeline_v3.src.random_forest_contract import EXPERIMENTAL_BUS_FEATURES, RF_FEATURES
+from pipeline_v4.src.modal_classification import RandomForestRouteEvaluator
+from pipeline_v4.src.random_forest_contract import EXPERIMENTAL_BUS_FEATURES, RF_FEATURES
 
 
 ROOT = Path(__file__).resolve().parent
@@ -64,3 +64,4 @@ class TestExpandedCandidate(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

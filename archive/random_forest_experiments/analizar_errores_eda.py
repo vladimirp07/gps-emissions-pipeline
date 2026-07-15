@@ -27,7 +27,7 @@ except ModuleNotFoundError:
 # Agregar la raíz del proyecto al path
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 sys.path.append(str(PROJECT_ROOT))
-from pipeline_v3.src import config
+from pipeline_v4.src import config
 
 MODOS = ["Carro", "Bus", "Metro", "Caminar"]
 MODE_TO_IDX = {m: i for i, m in enumerate(MODOS)}
@@ -245,3 +245,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

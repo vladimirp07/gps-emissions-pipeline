@@ -15,12 +15,12 @@ except ImportError:  # Cache serialized with NumPy 2.x, runtime on NumPy 1.x
     sys.modules.setdefault("numpy._core", numpy_core)
     sys.modules.setdefault("numpy._core.numeric", numpy_core_numeric)
 
-from pipeline_v3.src import config
-from pipeline_v3.src.modal_classification import (
+from pipeline_v4.src import config
+from pipeline_v4.src.modal_classification import (
     GuardrailedBayesianRouteEvaluator, HybridRouteEvaluator,
     RandomForestRouteEvaluator, create_modal_evaluator,
 )
-from pipeline_v3.src.random_forest_contract import (
+from pipeline_v4.src.random_forest_contract import (
     BUS_PROBABILITY_THRESHOLD, N1_FEATURES, N2_FEATURES, N3_FEATURES,
 )
 
@@ -46,7 +46,7 @@ class TestHybridModalProduction(unittest.TestCase):
     def test_three_persisted_resources_load(self):
         self.assertTrue((GPS / "modal_classifier_hybrid_v1.pkl").is_file())
         self.assertTrue((GPS / "random_forest_modal.pkl").is_file())
-        bayes_json = ROOT / "pipeline_v3/calibration_and_diagnostics/modal_classification/calibration/bayes/matrices_optimas.json"
+        bayes_json = ROOT / "pipeline_v4/calibration_and_diagnostics/modal_classification/calibration/bayes/matrices_optimas.json"
         self.assertIsInstance(json.loads(bayes_json.read_text(encoding="utf-8")), dict)
 
     def test_per_level_feature_contract_and_threshold(self):
@@ -101,7 +101,7 @@ class TestHybridModalProduction(unittest.TestCase):
         self.assertTrue(set(scenarios).isdisjoint(mixed))
 
     def test_orchestrator_only_uses_factory_and_configuration(self):
-        notebook = json.loads((ROOT / "pipeline_v3/orchestrator.ipynb").read_text(encoding="utf-8"))
+        notebook = json.loads((ROOT / "pipeline_v4/orchestrator.ipynb").read_text(encoding="utf-8"))
         source = "".join("".join(cell.get("source", [])) for cell in notebook["cells"])
         self.assertIn("create_modal_evaluator(config.MODAL_CLASSIFIER)", source)
         self.assertNotIn("RandomForestRouteEvaluator(", source)
@@ -130,3 +130,4 @@ class TestHybridModalProduction(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

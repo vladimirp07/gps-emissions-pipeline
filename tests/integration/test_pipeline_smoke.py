@@ -6,11 +6,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from pipeline_v3.src.emissions import calculate_emissions
-from pipeline_v3.src.modal_classification import create_modal_evaluator
-from pipeline_v3.src.pipeline_contracts import validate_routing_output
-from pipeline_v3.src.routing import _finalize_routing_contract
-from pipeline_v3.src.segmentation import assign_trips
+from pipeline_v4.src.emissions import calculate_emissions
+from pipeline_v4.src.modal_classification import create_modal_evaluator
+from pipeline_v4.src.pipeline_contracts import validate_routing_output
+from pipeline_v4.src.routing import _finalize_routing_contract
+from pipeline_v4.src.segmentation import assign_trips
 
 ROOT = Path(__file__).resolve().parents[2]
 SMOKE = ROOT / "outputs" / "production_smoke_tests"
@@ -110,4 +110,5 @@ class TestPipelineSmoke(unittest.TestCase):
         self.assertEqual(result["rejection_reason"], "quality_guardrail")
         failure = {"case": "guardrail", "status": "rejected", "cause": result["rejection_reason"]}
         (SMOKE / "failures.json").write_text(json.dumps([failure], indent=2), encoding="utf-8")
+
 

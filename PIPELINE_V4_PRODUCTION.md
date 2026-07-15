@@ -2,7 +2,7 @@
 
 **pipeline_v4_production — READY FOR CONTROLLED PRODUCTION**
 
-El código permanece en `pipeline_v3/` para no romper rutas. La versión lógica se fija en `config.PIPELINE_RELEASE`.
+El código de producción reside en `pipeline_v4/` y la versión lógica se fija en `config.PIPELINE_RELEASE`.
 
 ## Flujo
 
@@ -14,7 +14,7 @@ El código permanece en `pipeline_v3/` para no romper rutas. La versión lógica
 - Clasificación recibe hipótesis ruteadas y entrega clase, probabilidades, backend, versión, calidad y motivo de rechazo mediante `evaluate_with_contract`.
 - Emisiones recibe modo, `osmid`, metros, km/h, vía y hora. Entrega tasas `g/km`, distancia calculada en km, totales en g y estado del lookup.
 
-Los validadores centrales están en `pipeline_v3/src/pipeline_contracts.py`.
+Los validadores centrales están en `pipeline_v4/src/pipeline_contracts.py`.
 
 ## Clasificador modal
 
@@ -34,7 +34,7 @@ El runtime no depende del playground. El orquestador usa únicamente `create_mod
 
 ```powershell
 py -3.12 -m pytest tests -q
-jupyter nbconvert --to notebook --execute pipeline_v3/calibration_and_diagnostics/modal_classification/notebooks/playground_modal_classifier.ipynb
+jupyter nbconvert --to notebook --execute pipeline_v4/calibration_and_diagnostics/modal_classification/notebooks/playground_modal_classifier.ipynb
 ```
 
 ## Limitaciones
@@ -48,3 +48,4 @@ jupyter nbconvert --to notebook --execute pipeline_v3/calibration_and_diagnostic
 - Estado: READY FOR CONTROLLED PRODUCTION
 - Bloquea producción: No
 - Acción recomendada: operar con monitoreo de lookup y confirmar unidades MOVES.
+

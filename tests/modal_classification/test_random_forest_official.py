@@ -18,13 +18,13 @@ except ModuleNotFoundError:
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.append(str(PROJECT_ROOT))
 
-from pipeline_v3.src import config
-from pipeline_v3.src.modal_classification import (
+from pipeline_v4.src import config
+from pipeline_v4.src.modal_classification import (
     HybridRouteEvaluator,
     RandomForestRouteEvaluator,
     create_modal_evaluator,
 )
-from pipeline_v3.src.random_forest_contract import (
+from pipeline_v4.src.random_forest_contract import (
     EXPERIMENTAL_BUS_FEATURES,
     RF_FEATURES,
     TRAINING_SCENARIOS,
@@ -57,8 +57,8 @@ class TestRandomForestOfficial(unittest.TestCase):
         self.assertEqual(list(RF_FEATURES), self.model["feature_cols_new"])
         self.assertFalse(set(RF_FEATURES).intersection(EXPERIMENTAL_BUS_FEATURES))
 
-        training = (PROJECT_ROOT / "pipeline_v3/calibration_and_diagnostics/modal_classification/calibration/random_forest/entrenar_random_forest.py").read_text(encoding="utf-8")
-        notebook = (PROJECT_ROOT / "pipeline_v3/calibration_and_diagnostics/modal_classification/notebooks/playground_modal_classifier.ipynb").read_text(encoding="utf-8")
+        training = (PROJECT_ROOT / "pipeline_v4/calibration_and_diagnostics/modal_classification/calibration/random_forest/entrenar_random_forest.py").read_text(encoding="utf-8")
+        notebook = (PROJECT_ROOT / "pipeline_v4/calibration_and_diagnostics/modal_classification/notebooks/playground_modal_classifier.ipynb").read_text(encoding="utf-8")
         self.assertIn("feature_cols_v4 = list(RF_FEATURES)", training)
         self.assertIn("N2_FEATURES", notebook)
         self.assertIn("N1_FEATURES", notebook)
@@ -158,3 +158,4 @@ class TestRandomForestOfficial(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

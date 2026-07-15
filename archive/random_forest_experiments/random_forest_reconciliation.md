@@ -17,10 +17,10 @@ El modelo desplegado fue serializado con scikit-learn 1.5.2, usa 52 variables y 
 
 ### 1.1 Fuentes y consumo
 
-- **Generador de caché:** `pipeline_v3/calibration_and_diagnostics/modes_matrices_finetuning/random_forest_calibration/generar_datos_entrenamiento_ml.py`. Produce las series base ruteadas y, dentro de `local_features`, las variables de ventanas y paradas.
+- **Generador de caché:** `pipeline_v4/calibration_and_diagnostics/modes_matrices_finetuning/random_forest_calibration/generar_datos_entrenamiento_ml.py`. Produce las series base ruteadas y, dentro de `local_features`, las variables de ventanas y paradas.
 - **Reconstrucción para entrenamiento:** `entrenar_random_forest.py`, líneas 91–193. Agrega las series del caché y deriva las variables escalares que entran al modelo.
 - **Lista oficial de entrenamiento:** `entrenar_random_forest.py`, líneas 200–220.
-- **Inferencia:** `pipeline_v3/src/modal_classification.py`, lista en líneas 409–428 y extracción en `extract_features`, líneas 674–942.
+- **Inferencia:** `pipeline_v4/src/modal_classification.py`, lista en líneas 409–428 y extracción en `extract_features`, líneas 674–942.
 - **Notebook:** `playground_random_forest.ipynb`, celdas 4 y 5.
 - **PKL:** `Inputs/GPS User Data/random_forest_modal.pkl`, claves `feature_cols_v4` y `feature_cols_new`.
 
@@ -305,3 +305,4 @@ La evidencia disponible permite afirmar que la versión ejecutable y desplegada 
 Antes de oficializar 49 o 52 se necesita regenerar un dataset con manifiesto a partir de los 124 viajes canónicos, definir explícitamente un candidato de 49 variables con justificación trazable y compararlo contra las 52 bajo el mismo esquema de validación agrupada.
 
 **Recomendación inequívoca: C. No hay evidencia suficiente y es necesario regenerar el dataset y comparar 49 vs. 52.**
+

@@ -14,7 +14,7 @@ except AttributeError:
 PROJECT_ROOT = Path(r"C:\Users\Eydan\OneDrive\Escritorio\ITESM\MAITEC Lab\Eventos Masivos\GPS_Emissions_Project_Pipeline-v2.0")
 sys.path.append(str(PROJECT_ROOT))
 
-from pipeline_v3.src import config
+from pipeline_v4.src import config
 
 MODOS = ["Carro", "Bus", "Metro", "Caminar"]
 MODE_TO_IDX = {m: i for i, m in enumerate(MODOS)}
@@ -205,3 +205,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
