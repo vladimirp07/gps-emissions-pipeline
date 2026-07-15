@@ -2,7 +2,7 @@
   "release": "pipeline_v4_production",
   "status": "READY FOR CONTROLLED PRODUCTION",
   "date": "2026-07-15",
-  "commit_checkpoint": "b896cefc7bfe5049e365cb20327b927ee186509d",
+  "release_commit": "4d876b50c2ece4c015eabaadab98aad97ce9040c",
   "runtime": {
     "python": "3.12.6",
     "scikit_learn": "1.5.2",
