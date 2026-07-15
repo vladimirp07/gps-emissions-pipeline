@@ -2,6 +2,8 @@ import numpy as np
 import pandas as pd
 import warnings
 warnings.filterwarnings('ignore')
+from .pipeline_contracts import validate_emissions_input
+from . import config
 
 def calculate_emissions(df_rutas_in, file_moves_path):
     """
@@ -12,8 +14,14 @@ def calculate_emissions(df_rutas_in, file_moves_path):
     
     if df_rutas.empty:
         return df_rutas
+
+    contract_errors = validate_emissions_input(df_rutas)
+    if contract_errors:
+        raise ValueError(f"Entrada de emisiones incompatible: {contract_errors}")
         
     print("Iniciando Módulo 3: Cálculo de emisiones...")
+    if config.EMISSION_RATE_DISTANCE_UNIT != 'g/km':
+        raise RuntimeError("Producción v4 requiere tasas explícitas en g/km.")
     
     COLUMNA_MODO = 'modo_transporte' 
     COLUMNA_VELOCIDAD = 'Speed [km/h]'
@@ -41,7 +49,9 @@ def calculate_emissions(df_rutas_in, file_moves_path):
     df_rutas['Hour'] = df_rutas['local_timestamp'].dt.hour + 1
     df_rutas['Day'] = np.where(df_rutas['local_timestamp'].dt.dayofweek < 5, 5, 2)
     
-    df_rutas['Road'] = df_rutas['highway'].map(OSM_TO_MOVES_ROAD).fillna(5).astype(int)
+    mapped_road = df_rutas['highway'].map(OSM_TO_MOVES_ROAD)
+    df_rutas['road_lookup_status'] = np.where(mapped_road.isna(), 'default_road_5', 'mapped')
+    df_rutas['Road'] = mapped_road.fillna(5).astype(int)
     
     # Clasificación de Source ID de MOVES (0=No motorizado/Parada, 21=Auto/Carro, 42=Autobús/Bus)
     condiciones = [
@@ -55,8 +65,7 @@ def calculate_emissions(df_rutas_in, file_moves_path):
     # Clasificación en SpeedBins de MOVES (Convertido de km/h a mph)
     df_rutas['avg_speed_mph'] = df_rutas[COLUMNA_VELOCIDAD] * 0.621371
     bins = [0, 2.5, 7.5, 12.5, 17.5, 22.5, 27.5, 32.5, 37.5, 42.5, 47.5, 52.5, 57.5, 62.5, 67.5, 72.5, float('inf')]
-    df_rutas['SpeedBin'] = pd.cut(df_rutas['avg_speed_mph'], bins=bins, labels=list(range(1, 17)), right=False)
-    df_rutas['SpeedBin'] = df_rutas['SpeedBin'].astype(object).fillna(1).astype(int)
+    df_rutas['SpeedBin'] = pd.cut(df_rutas['avg_speed_mph'], bins=bins, labels=False, right=False).fillna(0).astype(int) + 1
     
     # 2. CRUCE CON MOVES EMISSION RATES
     merge_cols = ['Day', 'Hour', 'Road', 'Source', 'SpeedBin']
@@ -72,6 +81,9 @@ def calculate_emissions(df_rutas_in, file_moves_path):
     
     # Cruce de Nivel 1 (Exacto)
     df_motorizados = pd.merge(df_motorizados, df_emisiones, on=merge_cols, how='left')
+    df_motorizados['emission_lookup_status'] = np.where(
+        df_motorizados[POLLUTANTS[0]].notna(), 'exact', 'pending_imputation'
+    )
     
     # Lógica de Imputación en Cascada si hay registros faltantes
     mask_faltantes = df_motorizados[POLLUTANTS[0]].isna()
@@ -93,9 +105,15 @@ def calculate_emissions(df_rutas_in, file_moves_path):
         
         # Aplicar imputaciones en cascada
         for p in POLLUTANTS:
+            curve_available = df_motorizados[p].isna() & df_motorizados[f"{p}_curve"].notna()
+            source_available = df_motorizados[p].isna() & ~curve_available & df_motorizados[f"{p}_global"].notna()
+            df_motorizados.loc[curve_available, 'emission_lookup_status'] = 'imputed_speed_curve'
+            df_motorizados.loc[source_available, 'emission_lookup_status'] = 'imputed_source'
             df_motorizados[p] = df_motorizados[p].fillna(df_motorizados[f"{p}_curve"])
             df_motorizados[p] = df_motorizados[p].fillna(df_motorizados[f"{p}_global"])
-            df_motorizados[p] = df_motorizados[p].fillna(0.0) # Fallback absoluto
+            missing_absolute = df_motorizados[p].isna()
+            df_motorizados.loc[missing_absolute, 'emission_lookup_status'] = 'missing_zero_fallback'
+            df_motorizados[p] = df_motorizados[p].fillna(0.0)
             
         # Limpieza de columnas auxiliares de imputación
         cols_drop = [f"{p}_curve" for p in POLLUTANTS] + [f"{p}_global" for p in POLLUTANTS]
@@ -104,6 +122,7 @@ def calculate_emissions(df_rutas_in, file_moves_path):
     # Unir motorizados y no motorizados
     for p in POLLUTANTS: 
         df_no_motorizados[p] = 0.0
+    df_no_motorizados['emission_lookup_status'] = 'not_applicable_non_motorized'
         
     df_final = pd.concat([df_motorizados, df_no_motorizados], ignore_index=True).sort_values('orden_original').reset_index(drop=True)
     
@@ -119,6 +138,15 @@ def calculate_emissions(df_rutas_in, file_moves_path):
             (df_final[f"Densidad_{p}_g_km"] * df_final['distance_km_calc']) / OCUPACION_MEDIA_BUS,
             df_final[f"Densidad_{p}_g_km"] * df_final['distance_km_calc']
         )
+
+    # Unidades y aliases de nomenclatura exigidos por el contrato externo.
+    df_final['distance_unit'] = 'm'
+    df_final['emission_rate_unit'] = config.EMISSION_RATE_DISTANCE_UNIT
+    df_final['emission_total_unit'] = config.EMISSION_TOTAL_UNIT
+    df_final['Densidad_CO2e_g_km'] = df_final['Densidad_CO2_Equiv_g_km']
+    df_final['Total_CO2e_g'] = df_final['Total_CO2_Equiv_g']
+    df_final['Densidad_PM2.5_g_km'] = df_final['Densidad_PM25_g_km']
+    df_final['Total_PM2.5_g'] = df_final['Total_PM25_g']
         
     df_final['fecha_kepler'] = df_final['local_timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S')
     print("Módulo 3 completado exitosamente.")

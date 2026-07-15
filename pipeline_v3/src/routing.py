@@ -10,10 +10,26 @@ from shapely.ops import substring
 from shapely import wkt
 from shapely.geometry import Point, LineString
 from .segmentation import haversine_vectorized
+from .pipeline_contracts import ROUTING_REQUIRED_COLUMNS
 
 # --- TRANSFORMATION TRANSFORMERS ---
 TRANSFORMER_TO_UTM = Transformer.from_crs("EPSG:4326", "EPSG:32614", always_xy=True)
 TRANSFORMER_TO_WGS = Transformer.from_crs("EPSG:32614", "EPSG:4326", always_xy=True)
+
+
+def _finalize_routing_contract(res_df):
+    """Normaliza la salida de cualquier variante del router activo."""
+    if res_df.empty:
+        return res_df
+    res_df = res_df.copy()
+    res_df['local_timestamp'] = pd.to_datetime(res_df['local_timestamp'], errors='coerce')
+    res_df['physical_trip_id'] = res_df['caid'].astype(str) + '_' + res_df['trip'].astype(str)
+    res_df['network_hypothesis'] = res_df['modo_transporte'].astype(str)
+    res_df['duration_s'] = res_df.groupby('physical_trip_id')['local_timestamp'].diff().dt.total_seconds().fillna(0.0)
+    res_df['snap_distance_m'] = np.nan
+    res_df['snapping_quality_status'] = 'not_recorded_by_legacy_router'
+    res_df['routing_status'] = np.where(res_df['ruteo_fallido'].fillna(False), 'fallback_or_failed', 'success')
+    return res_df
 
 def get_candidates_vectorized(edges_gdf, gdf_points, buffer_m=150, max_cands=12):
     """
@@ -569,11 +585,14 @@ def complete_route(id, registros_person,
     if 'local_timestamp' in res_df.columns:
         res_df['local_timestamp'] = pd.to_datetime(res_df['local_timestamp'], errors='coerce')
         res_df['kepler_time'] = res_df['local_timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S')
+
+    res_df = _finalize_routing_contract(res_df)
         
     # NUEVO: Limpieza final - Removemos las columnas de tracking que usamos para el rollback
     columnas_a_borrar = ['idx_origen', 'idx_destino', 'nodo_final']
     res_df.drop(columns=[c for c in columnas_a_borrar if c in res_df.columns], inplace=True, errors='ignore')
 
+    res_df = _finalize_routing_contract(res_df)
     return res_df
 
 
@@ -1055,6 +1074,7 @@ def complete_route_v1_optimized(id, registros_person,
     columnas_a_borrar = ['idx_origen', 'idx_destino', 'nodo_final']
     res_df.drop(columns=[c for c in columnas_a_borrar if c in res_df.columns], inplace=True, errors='ignore')
 
+    res_df = _finalize_routing_contract(res_df)
     return res_df
 
 
@@ -1577,6 +1597,7 @@ def complete_route_v2_optimized(id, registros_person,
     columnas_a_borrar = ['idx_origen', 'idx_destino', 'nodo_final']
     res_df.drop(columns=[c for c in columnas_a_borrar if c in res_df.columns], inplace=True, errors='ignore')
 
+    res_df = _finalize_routing_contract(res_df)
     return res_df
 
 

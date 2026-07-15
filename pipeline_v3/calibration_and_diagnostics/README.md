@@ -23,11 +23,11 @@ El directorio se divide en tres subsistemas funcionales especializados:
 * **Flujo de Salida:** Generación del dataset saneado `Datos de MATLAB GPS Limpios.csv` libre de inconsistencias cronológicas y picos de velocidad físicamente imposibles.
 
 ### 1.3. [modes_matrices_finetuning](file:///C:/Users/Eydan/OneDrive/Escritorio/ITESM/MAITEC%20Lab/Eventos%20Masivos/GPS_Emissions_Project_Pipeline-v2.0/pipeline_v3/calibration_and_diagnostics/modes_matrices_finetuning)
-* **Función:** Calibración fina de matrices probabilísticas para el clasificador modal `BayesianRouteEvaluator`.
+* **Función:** Calibración del clasificador modal jerárquico híbrido oficial y de las alternativas Random Forest y Bayes.
 * **Componentes Clave:**
   * Generador de datos de entrenamiento: [generar_datos_entrenamiento.py](file:///C:/Users/Eydan/OneDrive/Escritorio/ITESM/MAITEC%20Lab/Eventos%20Masivos/GPS_Emissions_Project_Pipeline-v2.0/pipeline_v3/calibration_and_diagnostics/modes_matrices_finetuning/generar_datos_entrenamiento.py)
   * Guía técnica para sintonización con Optuna: [README.md](file:///C:/Users/Eydan/OneDrive/Escritorio/ITESM/MAITEC%20Lab/Eventos%20Masivos/GPS_Emissions_Project_Pipeline-v2.0/pipeline_v3/calibration_and_diagnostics/modes_matrices_finetuning/README.md)
-* **Flujo de Salida:** Creación de la estructura serializada `datos_entrenamiento_optuna.pkl`, permitiendo optimizaciones de alta velocidad sin invocar cálculos costosos de ruteo Dijkstra en tiempo de búsqueda hiperparamétrica.
+* **Flujo de Salida:** El artefacto oficial `modal_classifier_hybrid_v1.pkl` usa 114 viajes/445 escenarios. El Random Forest anterior se conserva como rollback y Bayes como alternativa; la selección ocurre con `MODAL_CLASSIFIER`.
 
 ---
 

@@ -1,0 +1,57 @@
+{
+  "model_version": "hybrid_v1",
+  "status": "production",
+  "model_family": "Clasificador modal jerárquico híbrido",
+  "trained_on": "2026-07-15",
+  "promoted_on": "2026-07-15",
+  "serializer": "pickle",
+  "scikit_learn_version": "1.5.2",
+  "artifact": "modal_classifier_hybrid_v1.pkl",
+  "training_dataset": {
+    "cache": "datos_entrenamiento_ml_expanded.pkl",
+    "physical_trips": 114,
+    "scenarios": 445,
+    "degradations": ["Raw", "L1", "L2", "L3"],
+    "grouped_by_physical_trip": true,
+    "mixed_labels_excluded": true,
+    "physical_trip_distribution": {"Carro": 87, "Bus": 12, "Metro": 6, "Caminar": 9},
+    "scenario_distribution": {"Carro": 337, "Bus": 48, "Metro": 24, "Caminar": 36}
+  },
+  "sha256": {
+    "modal_classifier_hybrid_v1.pkl": "1e28daf4606703fc8370c23181f855df20f34c2176a1ba2d67cd6dfafbc41e71",
+    "datos_entrenamiento_ml_expanded.pkl": "7c250a774d7a06a1d228c0e4734c9d1adf18ee8512059db2b1b2138c99ce2810"
+  },
+  "levels": {
+    "n1": {
+      "task": "Caminar vs Motorizado",
+      "type": "GradientBoostingClassifier",
+      "hyperparameters": {"n_estimators": 100, "learning_rate": 0.05, "max_depth": 2, "min_samples_leaf": 4, "random_state": 42},
+      "features": ["drive_mean_speed", "drive_max_speed", "drive_stop_frac", "walk_mean_speed", "walk_max_speed", "walk_std_speed", "walk_highway_footway_frac", "walk_p25_speed", "walk_p50_speed", "walk_p75_speed", "mean_snap_dist_drive", "mean_snap_dist_walk", "std_snap_dist_drive", "std_snap_dist_walk", "walk_win_walk_regime_max", "walk_win_walk_regime_consec_run"]
+    },
+    "n2": {
+      "task": "Metro vs Superficie",
+      "type": "RandomForestClassifier",
+      "hyperparameters": {"n_estimators": 100, "max_depth": 7, "min_samples_leaf": 4, "random_state": 42, "class_weight": "balanced"},
+      "features": ["drive_mean_speed", "drive_max_speed", "drive_std_speed", "drive_stop_frac", "drive_p25_speed", "drive_p50_speed", "drive_p75_speed", "drive_max_speed_diff", "drive_mean_speed_diff", "drive_highway_motorway_frac", "drive_highway_residential_frac", "drive_near_bus_frac", "drive_near_metro_frac", "drive_near_bus_drift_decay", "drive_near_bus_high_drift", "drive_num_stops", "drive_mean_stop_duration", "drive_mean_stop_interval", "drive_std_stop_interval", "walk_mean_speed", "walk_max_speed", "walk_std_speed", "walk_highway_footway_frac", "walk_p25_speed", "walk_p50_speed", "walk_p75_speed", "walk_max_speed_diff", "walk_mean_speed_diff", "metro_mean_speed", "metro_max_speed", "metro_near_metro_frac", "metro_p25_speed", "metro_p50_speed", "metro_p75_speed", "metro_max_speed_diff", "metro_mean_speed_diff", "mean_snap_dist_drive", "max_snap_dist_drive", "std_snap_dist_drive", "mean_snap_dist_walk", "max_snap_dist_walk", "std_snap_dist_walk", "metro_win_near_metro_max", "metro_win_near_metro_p90", "metro_win_near_metro_consec_run", "drive_win_near_bus_max", "drive_win_near_bus_p90", "drive_win_near_bus_consec_run", "drive_win_stops_max", "drive_win_stops_consec_run", "walk_win_walk_regime_max", "walk_win_walk_regime_consec_run"]
+    },
+    "n3": {
+      "task": "Carro vs Bus",
+      "type": "ExtraTreesClassifier",
+      "probability_threshold_bus": 0.5,
+      "hyperparameters": {"n_estimators": 200, "max_depth": 8, "min_samples_leaf": 2, "class_weight": "balanced", "random_state": 42, "n_jobs": 3},
+      "features": ["drive_mean_speed", "drive_max_speed", "drive_std_speed", "drive_stop_frac", "drive_p25_speed", "drive_p50_speed", "drive_p75_speed", "drive_max_speed_diff", "drive_mean_speed_diff", "drive_highway_motorway_frac", "drive_highway_residential_frac", "drive_near_bus_frac", "drive_num_stops", "drive_mean_stop_duration", "drive_mean_stop_interval", "drive_std_stop_interval", "mean_snap_dist_drive", "max_snap_dist_drive", "std_snap_dist_drive", "drive_near_bus_drift_decay", "drive_near_bus_high_drift", "drive_win_near_bus_max", "drive_win_near_bus_p90", "drive_win_near_bus_consec_run", "drive_win_stops_max"]
+    }
+  },
+  "validation_repeated_10": {
+    "environment": "scikit-learn 1.5.2 / production kernel",
+    "balanced_accuracy": 0.8885643339927465,
+    "macro_f1": 0.8840454831593937,
+    "recall": {"Carro": 0.9362017804154302, "Bus": 0.8125, "Metro": 1.0, "Caminar": 0.8055555555555556},
+    "precision": {"Bus": 0.6782608695652174, "Caminar": 0.90625},
+    "fold_standard_deviation": 0.08674718003722023,
+    "car_to_bus": 37,
+    "bus_to_car": 18
+  },
+  "guardrail": {"minimum_effective_pings": 15, "minimum_percent_conserved": 30.0},
+  "rollback_artifact": "random_forest_modal.pkl"
+}

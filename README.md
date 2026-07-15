@@ -103,17 +103,18 @@ The pipeline generates two main files in `Outputs/Final Outputs/`:
 The pipeline incorporates a machine learning classifier based on a hierarchical cascade architecture (Random Forest) for transportation mode prediction:
 
 * **Official Classifier Model**: **ML_v4_actual** utilizing 52 baseline variables.
-* **Available Canonical Training Dataset**: The deployed reproducible artifact uses **66 physical trips with a single label and 260 Raw/L1/L2/L3 scenarios**. Mixed-label trips are excluded. Regenerating the cache for all 124 single-label trips is registered as future work and does not block this production release.
+* **Official Modal Model**: The current production system is a **Clasificador modal jerárquico híbrido**, trained on 114 single-label physical trips and 445 Raw/L1/L2/L3 scenarios. Mixed-label trips are excluded.
 * **Hierarchical Cascade Logic**:
-  1. **NLevel 1**: Caminar (Pedestrian) vs Motorizado (Motorized)
-  2. **NLevel 2**: Metro (Subway) vs Superficie (Road)
-  3. **NLevel 3**: Carro (Car) vs Bus (Bus)
+  1. **N1**: Gradient Boosting, Caminar vs Motorizado, 16 features.
+  2. **N2**: Random Forest, Metro vs Superficie, 52 features.
+  3. **N3**: Extra Trees, Carro vs Bus, 25 features and Bus threshold 0.50.
 * **Feature Discarding (Bus Spacing & Persistence)**: 6 experimental variables added to N3 for Bus classification (`stop_cycles_per_km`, `median_stop_spacing_m`, `cv_stop_spacing`, `median_restart_time_s`, `p90_restart_time_s`, `stop_pattern_persistence`) were evaluated via a rigorous 20-fold `StratifiedGroupKFold` cross-validation. They did not show a consistent statistical advantage (yielding a slight accuracy decrease of -0.42%) and were officially discarded from production.
 * **Production Quality Guardrail**: In live inference, trips must satisfy:
   - **Pings efectivos >= 15**
   - **Porcentaje conservado (efectivo/bruto) >= 30%**
   If these are not met, the evaluator aborts classification and returns `"Calidad insuficiente"`.
 * **Archived Experiments**: Previous diagnostic files, intermediate plots, and comparison spreadsheets are moved to the `archive/random_forest_experiments/` folder.
-* **Runtime Selection**: `RandomForestRouteEvaluator` is the default classifier. Bayes is retained only through the explicit `ENABLE_BAYES_FALLBACK` configuration switch, disabled by default.
-* **Immutable Inference**: Runtime inference only loads and validates `random_forest_modal.pkl`; it never trains or overwrites a model.
-* **Manifest**: `Inputs/GPS User Data/random_forest_modal.manifest.json` records hashes, feature contract, dataset scope, dependency version and hyperparameters.
+* **Runtime Selection**: `MODAL_CLASSIFIER` in `config.py`, or the environment variable of the same name, selects `hybrid` (default), `random_forest` (rollback), or `bayes` without editing the orchestrator.
+* **Immutable Inference**: Runtime inference only loads and validates the selected artifact; it never trains or overwrites models. `random_forest_modal.pkl` remains intact for rollback and Bayes remains available.
+* **Validation Trade-off**: In the production environment the hybrid reached 88.86% Balanced Accuracy, Bus recall 81.25%, Caminar 80.56%, Carro 93.62% and Metro 100%. It recovers Bus strongly, with more Carro→Bus errors than the rollback and slightly lower Caminar recall.
+* **Manifest**: `Inputs/GPS User Data/modal_classifier_hybrid_v1.manifest.json` records per-level models/features, hashes, dataset, validation and dependencies.

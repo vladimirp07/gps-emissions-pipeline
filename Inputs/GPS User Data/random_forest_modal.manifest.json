@@ -1,0 +1,59 @@
+{
+  "model_version": "ML_v4_52",
+  "status": "production",
+  "created_or_reconciled_on": "2026-07-15",
+  "serializer": "pickle",
+  "scikit_learn_version": "1.5.2",
+  "training_dataset": {
+    "cache": "datos_entrenamiento_ml.pkl",
+    "physical_trips_with_single_label": 66,
+    "scenarios": 260,
+    "degradations": ["Raw", "L1", "L2", "L3"],
+    "mixed_label_trips_excluded": true,
+    "future_work": "Regenerar el caché para los 124 viajes canónicos completos y comparar bajo el mismo protocolo."
+  },
+  "sha256": {
+    "datos_entrenamiento_ml.pkl": "0c42a999b20e0a0bb0caf55cb6584bdf655352ca4613fe4d986dc535d0ebb22b",
+    "random_forest_modal.pkl": "c485216fb04205612474e4e9d42076a5bcc0ead525737d5a959adb53b3961154"
+  },
+  "feature_contract": "pipeline_v3/src/random_forest_contract.py::RF_FEATURES",
+  "feature_count": 52,
+  "feature_order": [
+    "drive_mean_speed", "drive_max_speed", "drive_std_speed", "drive_stop_frac",
+    "drive_p25_speed", "drive_p50_speed", "drive_p75_speed", "drive_max_speed_diff",
+    "drive_mean_speed_diff", "drive_highway_motorway_frac", "drive_highway_residential_frac",
+    "drive_near_bus_frac", "drive_near_metro_frac", "drive_near_bus_drift_decay",
+    "drive_near_bus_high_drift", "drive_num_stops", "drive_mean_stop_duration",
+    "drive_mean_stop_interval", "drive_std_stop_interval", "walk_mean_speed",
+    "walk_max_speed", "walk_std_speed", "walk_highway_footway_frac", "walk_p25_speed",
+    "walk_p50_speed", "walk_p75_speed", "walk_max_speed_diff", "walk_mean_speed_diff",
+    "metro_mean_speed", "metro_max_speed", "metro_near_metro_frac", "metro_p25_speed",
+    "metro_p50_speed", "metro_p75_speed", "metro_max_speed_diff", "metro_mean_speed_diff",
+    "mean_snap_dist_drive", "max_snap_dist_drive", "std_snap_dist_drive",
+    "mean_snap_dist_walk", "max_snap_dist_walk", "std_snap_dist_walk",
+    "metro_win_near_metro_max", "metro_win_near_metro_p90",
+    "metro_win_near_metro_consec_run", "drive_win_near_bus_max",
+    "drive_win_near_bus_p90", "drive_win_near_bus_consec_run", "drive_win_stops_max",
+    "drive_win_stops_consec_run", "walk_win_walk_regime_max",
+    "walk_win_walk_regime_consec_run"
+  ],
+  "experimental_bus_features_included": false,
+  "hyperparameters": {
+    "common": {
+      "n_estimators": 100,
+      "max_depth": 7,
+      "random_state": 42,
+      "class_weight": "balanced",
+      "criterion": "gini",
+      "max_features": "sqrt",
+      "bootstrap": true
+    },
+    "n1": {"min_samples_leaf": 4},
+    "n2": {"min_samples_leaf": 4},
+    "n3": {"min_samples_leaf": 2}
+  },
+  "guardrail": {
+    "minimum_effective_pings": 15,
+    "minimum_percent_conserved": 30.0
+  }
+}

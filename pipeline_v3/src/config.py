@@ -3,6 +3,7 @@ from pathlib import Path
 
 # Raíz del proyecto (dos niveles arriba de src/)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PIPELINE_RELEASE = "pipeline_v4_production"
 
 # Directorios de Entrada
 INPUTS_DIR = PROJECT_ROOT / "Inputs"
@@ -30,7 +31,16 @@ FILE_CACHE_IG_WALK = CACHE_INFRA_DIR / "ig_walk_y_map.pkl"
 
 # Rutas de Factores de Emisión de MOVES
 FILE_MOVES = RATES_DIR / "cleaned_emission_rates_formatted_SB.parquet"
+# Supuesto operativo provisional: los factores de la lookup están en g/km.
+# WARNING: confirmar contra la exportación MOVES original en una revisión futura.
+EMISSION_RATE_DISTANCE_UNIT = "g/km"
+EMISSION_DISTANCE_UNIT = "km"
+EMISSION_TOTAL_UNIT = "g"
 
-# Clasificación modal de producción. Bayes queda disponible sólo como fallback explícito.
-MODAL_CLASSIFIER = "random_forest"
+# Clasificador modal seleccionable sin modificar el orquestador.
+# Valores válidos: hybrid (oficial), random_forest (rollback), bayes.
+MODAL_CLASSIFIER = os.getenv("MODAL_CLASSIFIER", "hybrid").strip().lower()
 ENABLE_BAYES_FALLBACK = False
+
+FILE_MODAL_HYBRID = GPS_DIR / "modal_classifier_hybrid_v1.pkl"
+FILE_MODAL_RANDOM_FOREST = GPS_DIR / "random_forest_modal.pkl"

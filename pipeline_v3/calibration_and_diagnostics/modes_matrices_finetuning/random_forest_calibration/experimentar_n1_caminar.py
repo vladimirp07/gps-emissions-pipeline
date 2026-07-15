@@ -10,6 +10,13 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+try:
+    import numpy._core.numeric  # NumPy 2.x
+except ModuleNotFoundError:  # Pickles creados con NumPy 2.x leídos desde NumPy 1.x
+    import numpy.core as _numpy_core
+    import numpy.core.numeric as _numpy_numeric
+    sys.modules["numpy._core"] = _numpy_core
+    sys.modules["numpy._core.numeric"] = _numpy_numeric
 from sklearn.base import clone
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.inspection import permutation_importance

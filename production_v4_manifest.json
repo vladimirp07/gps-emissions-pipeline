@@ -1,0 +1,31 @@
+{
+  "release": "pipeline_v4_production",
+  "status": "READY FOR CONTROLLED PRODUCTION",
+  "date": "2026-07-15",
+  "commit_checkpoint": "b896cefc7bfe5049e365cb20327b927ee186509d",
+  "runtime": {
+    "python": "3.12.6",
+    "scikit_learn": "1.5.2",
+    "numpy": "1.26.4",
+    "pandas": "2.2.3",
+    "geopandas": "0.14.4",
+    "networkx": "3.3"
+  },
+  "modal_classifier": {
+    "default": "hybrid",
+    "alternatives": ["random_forest", "bayes"],
+    "hybrid_sha256": "1e28daf4606703fc8370c23181f855df20f34c2176a1ba2d67cd6dfafbc41e71",
+    "random_forest_sha256": "c485216fb04205612474e4e9d42076a5bcc0ead525737d5a959adb53b3961154"
+  },
+  "emissions_lookup": {
+    "file": "Inputs/Emission rates/cleaned_emission_rates_formatted_SB.parquet",
+    "sha256": "5b407d9aff3522cf299bd30e83c47b5b0bda4abe486bd63f9f88b661f7880c0c",
+    "rate_unit": "g/km",
+    "distance_unit": "km",
+    "total_unit": "g",
+    "unit_status": "provisional_warning_pending_source_confirmation"
+  },
+  "tests": {"pytest_passed": 26, "pytest_failed": 0, "notebook_clean_kernel": "PASS", "end_to_end_four_modes": "PASS"},
+  "guardrail": {"minimum_effective_pings": 15, "minimum_percent_conserved": 30.0},
+  "known_limitations": ["MOVES rate unit pending source confirmation", "legacy router does not persist numeric snap distance per subsegment"]
+}

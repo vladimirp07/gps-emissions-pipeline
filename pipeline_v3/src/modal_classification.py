@@ -398,19 +398,31 @@ class BayesianRouteEvaluator:
 
 
 try:
-    from .random_forest_contract import MIN_EFFECTIVE_PINGS, MIN_PCT_CONSERVED, RF_FEATURES
+    from .random_forest_contract import (
+        BUS_PROBABILITY_THRESHOLD, MIN_EFFECTIVE_PINGS, MIN_PCT_CONSERVED,
+        N1_FEATURES, N2_FEATURES, N3_FEATURES, RF_FEATURES,
+    )
 except ImportError:
-    from random_forest_contract import MIN_EFFECTIVE_PINGS, MIN_PCT_CONSERVED, RF_FEATURES
+    from random_forest_contract import (
+        BUS_PROBABILITY_THRESHOLD, MIN_EFFECTIVE_PINGS, MIN_PCT_CONSERVED,
+        N1_FEATURES, N2_FEATURES, N3_FEATURES, RF_FEATURES,
+    )
 
 
 class RandomForestRouteEvaluator:
     """Inferencia estricta del clasificador jerárquico ML v4 de 52 variables."""
 
     def __init__(self, model_path=None):
+        self.classifier_name = "random_forest"
+        self.model_version = "ML_v4_52"
         self.modos = ["Carro", "Bus", "Metro", "Caminar"]
         self.feature_cols_v4 = list(RF_FEATURES)
         self.feature_cols_new = list(RF_FEATURES)
         self.feature_cols = list(RF_FEATURES)
+        self.n1_features = list(RF_FEATURES)
+        self.n2_features = list(RF_FEATURES)
+        self.n3_features = list(RF_FEATURES)
+        self.bus_threshold = 0.50
         self.raw_counts = self._load_raw_counts()
         project_root = Path(__file__).resolve().parents[2]
         self.model_path = Path(model_path) if model_path else project_root / "Inputs" / "GPS User Data" / "random_forest_modal.pkl"
@@ -610,21 +622,28 @@ class RandomForestRouteEvaluator:
         if num_pings < MIN_EFFECTIVE_PINGS or pct_conserved < MIN_PCT_CONSERVED:
             return "Calidad insuficiente", None, 0.0, {mode: 0.0 for mode in self.modos}
 
-        features = pd.DataFrame([self.extract_features(hypotheses)], columns=RF_FEATURES)
-        pred_n1 = int(self.clf_n1.predict(features)[0])
-        prob_n1 = self.clf_n1.predict_proba(features)[0]
+        extracted = self.extract_features(hypotheses)
+        missing = [name for name in set(self.n1_features + self.n2_features + self.n3_features) if name not in extracted]
+        if missing:
+            raise ValueError(f"Faltan variables requeridas para inferencia: {sorted(missing)}")
+        features = pd.DataFrame([extracted], columns=RF_FEATURES)
+        x_n1 = features.loc[:, self.n1_features]
+        pred_n1 = int(self.clf_n1.predict(x_n1)[0])
+        prob_n1 = self.clf_n1.predict_proba(x_n1)[0]
         if pred_n1 == 0:
             mode, diagnostics = "Caminar", {"Caminar": float(prob_n1[0]), "Metro": 0.0, "Bus": 0.0, "Carro": 0.0}
         else:
-            pred_n2 = int(self.clf_n2.predict(features)[0])
-            prob_n2 = self.clf_n2.predict_proba(features)[0]
+            x_n2 = features.loc[:, self.n2_features]
+            pred_n2 = int(self.clf_n2.predict(x_n2)[0])
+            prob_n2 = self.clf_n2.predict_proba(x_n2)[0]
             if pred_n2 == 1:
                 mode = "Metro"
                 diagnostics = {"Caminar": float(prob_n1[0]), "Metro": float(prob_n1[1] * prob_n2[1]), "Bus": 0.0, "Carro": 0.0}
             else:
-                pred_n3 = int(self.clf_n3.predict(features)[0])
-                prob_n3 = self.clf_n3.predict_proba(features)[0]
-                mode = "Bus" if pred_n3 == 1 else "Carro"
+                x_n3 = features.loc[:, self.n3_features]
+                prob_n3 = self.clf_n3.predict_proba(x_n3)[0]
+                pred_n3 = int(prob_n3[1] >= self.bus_threshold)
+                mode = "Bus" if pred_n3 else "Carro"
                 diagnostics = {"Caminar": float(prob_n1[0]), "Metro": float(prob_n1[1] * prob_n2[1]),
                                "Bus": float(prob_n1[1] * prob_n2[0] * prob_n3[1]),
                                "Carro": float(prob_n1[1] * prob_n2[0] * prob_n3[0])}
@@ -644,11 +663,126 @@ class RandomForestRouteEvaluator:
         selected["modo_transporte"] = mode
         return mode, selected, diagnostics.get(mode, 0.0), diagnostics
 
+    def evaluate_with_contract(self, hypotheses, subway_routes=None, bus_routes=None):
+        mode, selected, probability, probabilities = self.select_final_mode(hypotheses, subway_routes, bus_routes)
+        accepted = mode not in {None, "Calidad insuficiente"}
+        return {
+            "final_class": mode,
+            "probabilities": probabilities,
+            "selected_route": selected,
+            "selected_probability": probability,
+            "classifier": self.classifier_name,
+            "model_version": self.model_version,
+            "quality_status": "accepted" if accepted else "rejected",
+            "rejection_reason": None if accepted else ("quality_guardrail" if mode == "Calidad insuficiente" else "no_hypotheses"),
+        }
 
-def create_modal_evaluator(classifier="random_forest", enable_bayes_fallback=False):
+
+class HybridRouteEvaluator(RandomForestRouteEvaluator):
+    """Clasificador modal jerárquico híbrido oficial: GB / RF / Extra Trees."""
+
+    def __init__(self, model_path=None):
+        self.classifier_name = "hybrid"
+        self.model_version = "hybrid_v1"
+        self.modos = ["Carro", "Bus", "Metro", "Caminar"]
+        self.feature_cols_v4 = list(RF_FEATURES)
+        self.feature_cols_new = list(RF_FEATURES)
+        self.feature_cols = list(RF_FEATURES)
+        self.n1_features = list(N1_FEATURES)
+        self.n2_features = list(N2_FEATURES)
+        self.n3_features = list(N3_FEATURES)
+        self.bus_threshold = BUS_PROBABILITY_THRESHOLD
+        self.raw_counts = self._load_raw_counts()
+        project_root = Path(__file__).resolve().parents[2]
+        self.model_path = Path(model_path) if model_path else project_root / "Inputs" / "GPS User Data" / "modal_classifier_hybrid_v1.pkl"
+        self.loaded_from_disk = False
+        self._load_hybrid_model()
+
+    def _load_hybrid_model(self):
+        import pickle
+        if not self.model_path.exists():
+            raise FileNotFoundError(
+                f"No se encontró el modelo híbrido oficial en {self.model_path}. "
+                "La inferencia no entrena ni sobrescribe modelos."
+            )
+        try:
+            with self.model_path.open("rb") as handle:
+                saved = pickle.load(handle)
+            contract = saved.get("model_contract", {})
+            expected = {"n1": self.n1_features, "n2": self.n2_features, "n3": self.n3_features}
+            for level, features in expected.items():
+                declared = contract.get(level, {}).get("features")
+                if declared != features:
+                    raise ValueError(f"Orden de variables incompatible en {level}: se esperaban {len(features)}.")
+                classifier = saved.get(f"clf_{level}")
+                if classifier is None or getattr(classifier, "n_features_in_", None) != len(features):
+                    raise ValueError(f"clf_{level} no acepta las {len(features)} variables del contrato.")
+                names = list(getattr(classifier, "feature_names_in_", []))
+                if names and names != features:
+                    raise ValueError(f"Orden interno de clf_{level} incompatible.")
+                setattr(self, f"clf_{level}", classifier)
+            threshold = float(contract.get("n3", {}).get("threshold_bus", -1))
+            if threshold != BUS_PROBABILITY_THRESHOLD:
+                raise ValueError(f"Umbral Bus incompatible: {threshold}; esperado {BUS_PROBABILITY_THRESHOLD}.")
+            self.bus_threshold = threshold
+            self.clf = self.clf_n1
+            self.loaded_from_disk = True
+            print(f"[HybridRouteEvaluator] Modelo híbrido cargado desde {self.model_path}")
+        except Exception as exc:
+            raise RuntimeError(f"No se pudo cargar el modelo híbrido compatible desde {self.model_path}: {exc}") from exc
+
+
+class GuardrailedBayesianRouteEvaluator(BayesianRouteEvaluator):
+    """Bayes histórico con el mismo guardrail de calidad de los modelos ML."""
+
+    def __init__(self):
+        super().__init__()
+        self.classifier_name = "bayes"
+        self.model_version = "bayes_matrices_v1"
+        self.raw_counts = RandomForestRouteEvaluator._load_raw_counts(self)
+
+    _trip_key = staticmethod(RandomForestRouteEvaluator._trip_key)
+
+    def select_final_mode(self, hypotheses, subway_routes, bus_routes):
+        if not hypotheses:
+            return None, None, 0.0, {}
+        frame = next(iter(hypotheses.values()))
+        num_pings = len(frame)
+        caid_col = "caid" if "caid" in frame else "id_usuario" if "id_usuario" in frame else None
+        trip_col = "num_trip" if "num_trip" in frame else "trip" if "trip" in frame else None
+        pct = 100.0
+        if caid_col and trip_col and num_pings:
+            raw = self.raw_counts.get(self._trip_key(frame[caid_col].iloc[0], frame[trip_col].iloc[0]))
+            if raw:
+                pct = 100.0 * num_pings / raw
+        if num_pings < MIN_EFFECTIVE_PINGS or pct < MIN_PCT_CONSERVED:
+            return "Calidad insuficiente", None, 0.0, {mode: 0.0 for mode in self.modos}
+        return super().select_final_mode(hypotheses, subway_routes, bus_routes)
+
+    def evaluate_with_contract(self, hypotheses, subway_routes, bus_routes):
+        mode, selected, probability, probabilities = self.select_final_mode(hypotheses, subway_routes, bus_routes)
+        accepted = mode not in {None, "Calidad insuficiente"}
+        return {
+            "final_class": mode, "probabilities": probabilities,
+            "selected_route": selected, "selected_probability": probability,
+            "classifier": self.classifier_name, "model_version": self.model_version,
+            "quality_status": "accepted" if accepted else "rejected",
+            "rejection_reason": None if accepted else ("quality_guardrail" if mode == "Calidad insuficiente" else "no_hypotheses"),
+        }
+
+
+def create_modal_evaluator(classifier=None, enable_bayes_fallback=False):
+    if classifier is None:
+        try:
+            from . import config
+        except ImportError:
+            import config
+        classifier = config.MODAL_CLASSIFIER
     classifier = str(classifier).strip().lower()
-    if classifier == "bayesian":
-        return BayesianRouteEvaluator()
+    if classifier in {"bayes", "bayesian"}:
+        return GuardrailedBayesianRouteEvaluator()
+    if classifier == "hybrid":
+        return HybridRouteEvaluator()
     if classifier != "random_forest":
         raise ValueError(f"Clasificador modal desconocido: {classifier!r}")
     try:

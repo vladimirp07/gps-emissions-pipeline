@@ -15,11 +15,12 @@ except ModuleNotFoundError:
     sys.modules["numpy._core"] = numpy_core
     sys.modules["numpy._core.numeric"] = numpy_core_numeric
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.append(str(PROJECT_ROOT))
 
 from pipeline_v3.src import config
 from pipeline_v3.src.modal_classification import (
+    HybridRouteEvaluator,
     RandomForestRouteEvaluator,
     create_modal_evaluator,
 )
@@ -59,8 +60,10 @@ class TestRandomForestOfficial(unittest.TestCase):
         training = (PROJECT_ROOT / "pipeline_v3/calibration_and_diagnostics/modes_matrices_finetuning/random_forest_calibration/entrenar_random_forest.py").read_text(encoding="utf-8")
         notebook = (PROJECT_ROOT / "pipeline_v3/calibration_and_diagnostics/modes_matrices_finetuning/random_forest_calibration/playground_random_forest.ipynb").read_text(encoding="utf-8")
         self.assertIn("feature_cols_v4 = list(RF_FEATURES)", training)
-        self.assertIn("feature_cols_v4 = list(RF_FEATURES)", notebook)
-        self.assertNotIn("49 variables", notebook)
+        self.assertIn("N2_FEATURES", notebook)
+        self.assertIn("N1_FEATURES", notebook)
+        self.assertIn("N3_FEATURES", notebook)
+        self.assertIn("El flujo principal actual es el clasificador modal jerárquico híbrido", notebook)
 
     def test_model_is_loadable_and_has_compatible_estimators(self):
         self.assertTrue(self.evaluator.loaded_from_disk)
@@ -145,10 +148,11 @@ class TestRandomForestOfficial(unittest.TestCase):
         self.assertEqual(mode, "Calidad insuficiente")
         self.assertIsNone(selected)
 
-    def test_orchestrator_factory_defaults_to_random_forest(self):
-        scorer = create_modal_evaluator(config.MODAL_CLASSIFIER, config.ENABLE_BAYES_FALLBACK)
-        self.assertIsInstance(scorer, RandomForestRouteEvaluator)
-        self.assertEqual(config.MODAL_CLASSIFIER, "random_forest")
+    def test_orchestrator_factory_defaults_to_hybrid_with_rf_rollback(self):
+        scorer = create_modal_evaluator(config.MODAL_CLASSIFIER)
+        self.assertIsInstance(scorer, HybridRouteEvaluator)
+        self.assertIsInstance(create_modal_evaluator("random_forest"), RandomForestRouteEvaluator)
+        self.assertEqual(config.MODAL_CLASSIFIER, "hybrid")
         self.assertFalse(config.ENABLE_BAYES_FALLBACK)
 
 

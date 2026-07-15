@@ -47,3 +47,47 @@ RF_HYPERPARAMETERS = {
 
 assert len(RF_FEATURES) == 52
 assert not set(RF_FEATURES).intersection(EXPERIMENTAL_BUS_FEATURES)
+
+# Contrato oficial del clasificador modal jerárquico híbrido.
+HYBRID_MODEL_VERSION = "hybrid_v1"
+HYBRID_TRAINING_TRIPS = 114
+HYBRID_TRAINING_SCENARIOS = 445
+BUS_PROBABILITY_THRESHOLD = 0.50
+
+N1_FEATURES = (
+    "drive_mean_speed", "drive_max_speed", "drive_stop_frac",
+    "walk_mean_speed", "walk_max_speed", "walk_std_speed",
+    "walk_highway_footway_frac", "walk_p25_speed", "walk_p50_speed",
+    "walk_p75_speed", "mean_snap_dist_drive", "mean_snap_dist_walk",
+    "std_snap_dist_drive", "std_snap_dist_walk",
+    "walk_win_walk_regime_max", "walk_win_walk_regime_consec_run",
+)
+
+N2_FEATURES = RF_FEATURES
+
+N3_FEATURES = (
+    "drive_mean_speed", "drive_max_speed", "drive_std_speed", "drive_stop_frac",
+    "drive_p25_speed", "drive_p50_speed", "drive_p75_speed",
+    "drive_max_speed_diff", "drive_mean_speed_diff",
+    "drive_highway_motorway_frac", "drive_highway_residential_frac",
+    "drive_near_bus_frac", "drive_num_stops", "drive_mean_stop_duration",
+    "drive_mean_stop_interval", "drive_std_stop_interval",
+    "mean_snap_dist_drive", "max_snap_dist_drive", "std_snap_dist_drive",
+    "drive_near_bus_drift_decay", "drive_near_bus_high_drift",
+    "drive_win_near_bus_max", "drive_win_near_bus_p90",
+    "drive_win_near_bus_consec_run", "drive_win_stops_max",
+)
+
+HYBRID_HYPERPARAMETERS = {
+    "n1": {"n_estimators": 100, "learning_rate": 0.05, "max_depth": 2,
+           "min_samples_leaf": 4, "random_state": 42},
+    "n2": RF_HYPERPARAMETERS["n2"],
+    "n3": {"n_estimators": 200, "max_depth": 8, "min_samples_leaf": 2,
+           "class_weight": "balanced", "random_state": 42, "n_jobs": 3},
+}
+
+assert len(N1_FEATURES) == 16
+assert len(N2_FEATURES) == 52
+assert len(N3_FEATURES) == 25
+assert set(N1_FEATURES).issubset(RF_FEATURES)
+assert set(N3_FEATURES).issubset(RF_FEATURES)
