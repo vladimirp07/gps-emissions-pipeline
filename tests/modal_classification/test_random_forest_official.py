@@ -57,8 +57,8 @@ class TestRandomForestOfficial(unittest.TestCase):
         self.assertEqual(list(RF_FEATURES), self.model["feature_cols_new"])
         self.assertFalse(set(RF_FEATURES).intersection(EXPERIMENTAL_BUS_FEATURES))
 
-        training = (PROJECT_ROOT / "pipeline_v3/calibration_and_diagnostics/modes_matrices_finetuning/random_forest_calibration/entrenar_random_forest.py").read_text(encoding="utf-8")
-        notebook = (PROJECT_ROOT / "pipeline_v3/calibration_and_diagnostics/modes_matrices_finetuning/random_forest_calibration/playground_random_forest.ipynb").read_text(encoding="utf-8")
+        training = (PROJECT_ROOT / "pipeline_v3/calibration_and_diagnostics/modal_classification/calibration/random_forest/entrenar_random_forest.py").read_text(encoding="utf-8")
+        notebook = (PROJECT_ROOT / "pipeline_v3/calibration_and_diagnostics/modal_classification/notebooks/playground_modal_classifier.ipynb").read_text(encoding="utf-8")
         self.assertIn("feature_cols_v4 = list(RF_FEATURES)", training)
         self.assertIn("N2_FEATURES", notebook)
         self.assertIn("N1_FEATURES", notebook)

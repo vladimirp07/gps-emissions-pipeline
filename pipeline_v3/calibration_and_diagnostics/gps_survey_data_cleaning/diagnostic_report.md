@@ -107,8 +107,8 @@ Durante la auditoría del pipeline, se identificó un bug crítico en la lógica
 
 Para entrenar Optuna en menos de 5 segundos evitando la latencia de 1-2 segundos que introduce el cálculo Dijkstra por viaje, implementamos una **arquitectura desacoplada**:
 
-1.  **Fase A (Offline - [generar_datos_entrenamiento.py](file:///C:/Users/Eydan/OneDrive/Escritorio/ITESM/MAITEC%20Lab/Eventos%20Masivos/GPS_Emissions_Project_Pipeline-v2.0/pipeline_v3/calibration_and_diagnostics/modes_matrices_finetuning/generar_datos_entrenamiento.py)):** Carga los datos limpios de MATLAB, realiza el map matching y ruteo una única vez, discretiza las variables de producción y guarda los índices correspondientes en el archivo serializado `datos_entrenamiento_optuna.pkl`.
-2.  **Fase B (Online - [optimizar_matrices_optuna.py](file:///C:/Users/Eydan/OneDrive/Escritorio/ITESM/MAITEC%20Lab/Eventos%20Masivos/GPS_Emissions_Project_Pipeline-v2.0/pipeline_v3/calibration_and_diagnostics/modes_matrices_finetuning/optimizar_matrices_optuna.py)):** Carga el caché precomputado y ejecuta la optimización de Optuna en memoria mediante lookups rápidos de NumPy (`probs_by_mode = Cercania[idx_c] * Velocidad[idx_v]...`).
+1.  **Fase A (Offline - [generar_datos_entrenamiento.py](file:///C:/Users/Eydan/OneDrive/Escritorio/ITESM/MAITEC%20Lab/Eventos%20Masivos/GPS_Emissions_Project_Pipeline-v2.0/pipeline_v3/calibration_and_diagnostics/modal_classification/generar_datos_entrenamiento.py)):** Carga los datos limpios de MATLAB, realiza el map matching y ruteo una única vez, discretiza las variables de producción y guarda los índices correspondientes en el archivo serializado `datos_entrenamiento_optuna.pkl`.
+2.  **Fase B (Online - [optimizar_matrices_optuna.py](file:///C:/Users/Eydan/OneDrive/Escritorio/ITESM/MAITEC%20Lab/Eventos%20Masivos/GPS_Emissions_Project_Pipeline-v2.0/pipeline_v3/calibration_and_diagnostics/modal_classification/optimizar_matrices_optuna.py)):** Carga el caché precomputado y ejecuta la optimización de Optuna en memoria mediante lookups rápidos de NumPy (`probs_by_mode = Cercania[idx_c] * Velocidad[idx_v]...`).
 
 ### Instrucciones de ejecución
 Para regenerar la base de entrenamiento con la sintonización balanceada de 15 viajes por modo (con la nueva limpieza de extremos estáticos activa), ejecuta en tu terminal:
@@ -118,5 +118,6 @@ Para regenerar la base de entrenamiento con la sintonización balanceada de 15 v
 python pipeline_v3/calibration_and_diagnostics/gps_survey_data_cleaning/depurar_datos_matlab.py
 
 # 2. Generación de caché desacoplado para Optuna (15 viajes balanceados por modo)
-python pipeline_v3/calibration_and_diagnostics/modes_matrices_finetuning/generar_datos_entrenamiento.py --balanced --trips-per-mode 15
+python pipeline_v3/calibration_and_diagnostics/modal_classification/generar_datos_entrenamiento.py --balanced --trips-per-mode 15
 ```
+

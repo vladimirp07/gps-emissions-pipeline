@@ -25,7 +25,7 @@ MEJORAS v2 (respecto a la versión anterior):
 
 Uso:
   # Optimización estándar (5,000 trials, balanced accuracy)
-  python pipeline_v3/calibration_and_diagnostics/modes_matrices_finetuning/optimizar_matrices_optuna.py
+  python pipeline_v3/calibration_and_diagnostics/modal_classification/calibration/bayes/optimizar_matrices_optuna.py
 
   # Usar F1-Score macro como métrica objetivo
   python ... --metric f1
@@ -645,7 +645,7 @@ def main():
     if not args.pkl.exists():
         print(f"\n[ERROR] No se encontró el archivo: {args.pkl}")
         print("  Asegúrate de haber ejecutado primero:")
-        print("    python pipeline_v3/calibration_and_diagnostics/modes_matrices_finetuning/generar_datos_entrenamiento.py")
+        print("    python pipeline_v3/calibration_and_diagnostics/modal_classification/calibration/bayes/generar_datos_entrenamiento.py")
         sys.exit(1)
 
     with open(args.pkl, "rb") as f:

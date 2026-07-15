@@ -1,10 +1,19 @@
 import json
 import pickle
+import sys
 import unittest
 from unittest.mock import patch
 from pathlib import Path
 
 import pandas as pd
+
+try:
+    import numpy._core.numeric  # NumPy 2.x
+except ImportError:  # Cache serialized with NumPy 2.x, runtime on NumPy 1.x
+    import numpy.core as numpy_core
+    import numpy.core.numeric as numpy_core_numeric
+    sys.modules.setdefault("numpy._core", numpy_core)
+    sys.modules.setdefault("numpy._core.numeric", numpy_core_numeric)
 
 from pipeline_v3.src import config
 from pipeline_v3.src.modal_classification import (
@@ -37,7 +46,7 @@ class TestHybridModalProduction(unittest.TestCase):
     def test_three_persisted_resources_load(self):
         self.assertTrue((GPS / "modal_classifier_hybrid_v1.pkl").is_file())
         self.assertTrue((GPS / "random_forest_modal.pkl").is_file())
-        bayes_json = ROOT / "pipeline_v3/calibration_and_diagnostics/modes_matrices_finetuning/bayesian_calibration/matrices_optimas.json"
+        bayes_json = ROOT / "pipeline_v3/calibration_and_diagnostics/modal_classification/calibration/bayes/matrices_optimas.json"
         self.assertIsInstance(json.loads(bayes_json.read_text(encoding="utf-8")), dict)
 
     def test_per_level_feature_contract_and_threshold(self):

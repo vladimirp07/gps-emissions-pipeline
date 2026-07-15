@@ -34,7 +34,7 @@ El runtime no depende del playground. El orquestador usa únicamente `create_mod
 
 ```powershell
 py -3.12 -m pytest tests -q
-jupyter nbconvert --to notebook --execute pipeline_v3/calibration_and_diagnostics/modes_matrices_finetuning/random_forest_calibration/playground_random_forest.ipynb
+jupyter nbconvert --to notebook --execute pipeline_v3/calibration_and_diagnostics/modal_classification/notebooks/playground_modal_classifier.ipynb
 ```
 
 ## Limitaciones
@@ -48,4 +48,3 @@ jupyter nbconvert --to notebook --execute pipeline_v3/calibration_and_diagnostic
 - Estado: READY FOR CONTROLLED PRODUCTION
 - Bloquea producción: No
 - Acción recomendada: operar con monitoreo de lookup y confirmar unidades MOVES.
-

@@ -48,7 +48,7 @@ flowchart LR
 │   └── calibration_and_diagnostics/ # Subsystem for routing calibration, survey depuration, and bayesian tuning
 │       ├── routing_algorithm_calibration/ # GPS sensitivity analysis and optimal parameters identification
 │       ├── gps_survey_data_cleaning/     # Automated parsing and cleaning of manual MATLAB survey records
-│       └── modes_matrices_finetuning/    # Subsystem for modal classification tuning and model training
+│       └── modal_classification/         # Notebooks and calibration for modal classification
 │           ├── bayesian_calibration/      # Bayesian matrices calibration using Optuna
 │           └── random_forest_calibration/  # Random Forest hierarchical model training and diagnostics
 ├── legacy/                        # Legacy or baseline pipeline notebooks (e.g., V1 baseline)
