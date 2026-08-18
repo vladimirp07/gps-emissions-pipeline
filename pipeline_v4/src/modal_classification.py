@@ -2,9 +2,99 @@
 import numpy as np
 import pandas as pd
 import geopandas as gpd
+from collections import OrderedDict
+from dataclasses import dataclass
 from pathlib import Path
+from threading import Lock
 
-def calcular_cercania_infraestructura(df, subway_routes, bus_routes):
+
+class ServingContractError(ValueError):
+    """Raised when production cannot reproduce the classifier training inputs."""
+
+
+@dataclass(frozen=True)
+class TripServingContext:
+    """GPS-level inputs that routing rows cannot faithfully represent.
+
+    Snap distances follow the training generator contract: one minimum candidate
+    distance per effective GPS ping, with the configured search buffer used when
+    no candidate exists.
+    """
+
+    raw_ping_count: int
+    effective_ping_count: int
+    snap_dist_drive: tuple[float, ...]
+    snap_dist_walk: tuple[float, ...]
+
+    @property
+    def pct_pings_conserved(self) -> float:
+        return (
+            100.0 * self.effective_ping_count / self.raw_ping_count
+            if self.raw_ping_count > 0 else 0.0
+        )
+
+    @classmethod
+    def from_trip(cls, trip, raw_ping_count, drive_buffer_m=150.0, walk_buffer_m=50.0):
+        def minima(column, fallback):
+            if column not in trip:
+                raise ServingContractError(f"Falta {column!r} en los pings efectivos del viaje.")
+            values = []
+            for candidates in trip[column]:
+                candidates = list(candidates) if candidates is not None else []
+                values.append(float(min(candidates)) if candidates else float(fallback))
+            return tuple(values)
+
+        return cls(
+            raw_ping_count=int(raw_ping_count),
+            effective_ping_count=int(len(trip)),
+            snap_dist_drive=minima("drive_dists", drive_buffer_m),
+            snap_dist_walk=minima("walk_dists", walk_buffer_m),
+        )
+
+class InfrastructureProximityCache:
+    """Run-scoped, bounded cache for exact coordinate proximity flags."""
+
+    def __init__(self, max_entries=200_000):
+        self.max_entries = int(max_entries)
+        self._values = OrderedDict()
+        self._lock = Lock()
+        self.hits = 0
+        self.misses = 0
+        self.evictions = 0
+
+    def get_many(self, keys):
+        found = {}
+        with self._lock:
+            for key in keys:
+                if key in self._values:
+                    self.hits += 1
+                    self._values.move_to_end(key)
+                    found[key] = self._values[key]
+                else:
+                    self.misses += 1
+        return found
+
+    def put_many(self, values):
+        with self._lock:
+            for key, value in values.items():
+                self._values[key] = value
+                self._values.move_to_end(key)
+                if len(self._values) > self.max_entries:
+                    self._values.popitem(last=False)
+                    self.evictions += 1
+
+    def stats(self):
+        with self._lock:
+            return {
+                "hits": self.hits, "misses": self.misses,
+                "evictions": self.evictions, "entries": len(self._values),
+                "max_entries": self.max_entries,
+            }
+
+
+def calcular_cercania_infraestructura(
+    df, subway_routes, bus_routes, *, proximity_cache: InfrastructureProximityCache | None = None,
+):
     """
     Calcula la proximidad espacial (distancia métrica exacta) de cada ping GPS
     a las líneas físicas del metro y rutas de autobús oficiales.
@@ -12,8 +102,30 @@ def calcular_cercania_infraestructura(df, subway_routes, bus_routes):
     if df.empty:
         return df.copy()
         
-    # 1. Proyectar temporalmente a UTM 14N (EPSG:32614)
-    gdf_pts = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.longitude, df.latitude), crs="EPSG:4326")
+    coordinate_keys = list(zip(df["longitude"].tolist(), df["latitude"].tolist()))
+    unique_coordinates = list(dict.fromkeys(coordinate_keys))
+    namespace = (id(subway_routes), id(bus_routes))
+    cache_keys = [(*namespace, *coordinate) for coordinate in unique_coordinates]
+    known_by_cache_key = proximity_cache.get_many(cache_keys) if proximity_cache is not None else {}
+    known = {
+        coordinate: known_by_cache_key[cache_key]
+        for coordinate, cache_key in zip(unique_coordinates, cache_keys)
+        if cache_key in known_by_cache_key
+    }
+    missing_keys = [key for key in unique_coordinates if key not in known]
+
+    if not missing_keys:
+        df["near_subway_line"] = [known[key][0] for key in coordinate_keys]
+        df["near_bus_route"] = [known[key][1] for key in coordinate_keys]
+        return df
+
+    # 1. Proyectar temporalmente sólo coordenadas exactas aún no evaluadas.
+    missing = pd.DataFrame(missing_keys, columns=["longitude", "latitude"])
+    gdf_pts = gpd.GeoDataFrame(
+        missing,
+        geometry=gpd.points_from_xy(missing.longitude, missing.latitude),
+        crs="EPSG:4326",
+    )
     gdf_pts = gdf_pts.to_crs("EPSG:32614")
     
     subway_proj = subway_routes.to_crs("EPSG:32614") if subway_routes.crs != "EPSG:32614" else subway_routes
@@ -26,12 +138,22 @@ def calcular_cercania_infraestructura(df, subway_routes, bus_routes):
     # --- METRO ---
     metro_join = gpd.sjoin_nearest(gdf_pts, subway_proj, how='left', distance_col='dist_metro')
     metro_join = metro_join[~metro_join.index.duplicated(keep='first')] # Limpiar empates de distancia
-    df['near_subway_line'] = (metro_join['dist_metro'] < RADIO_METRO).astype(int)
+    near_metro = (metro_join['dist_metro'] < RADIO_METRO).astype(int).to_numpy()
     
     # --- BUS ---
     bus_join = gpd.sjoin_nearest(gdf_pts, bus_proj, how='left', distance_col='dist_bus')
     bus_join = bus_join[~bus_join.index.duplicated(keep='first')] 
-    df['near_bus_route'] = (bus_join['dist_bus'] < RADIO_BUS).astype(int)
+    near_bus = (bus_join['dist_bus'] < RADIO_BUS).astype(int).to_numpy()
+
+    computed = {
+        key: (int(metro_value), int(bus_value))
+        for key, metro_value, bus_value in zip(missing_keys, near_metro, near_bus)
+    }
+    if proximity_cache is not None:
+        proximity_cache.put_many({(*namespace, *key): value for key, value in computed.items()})
+    values = {**known, **computed}
+    df['near_subway_line'] = [values[key][0] for key in coordinate_keys]
+    df['near_bus_route'] = [values[key][1] for key in coordinate_keys]
     
     return df
 
@@ -425,7 +547,7 @@ class RandomForestRouteEvaluator:
         self.bus_threshold = 0.50
         self.raw_counts = self._load_raw_counts()
         project_root = Path(__file__).resolve().parents[2]
-        self.model_path = Path(model_path) if model_path else project_root / "Inputs" / "GPS User Data" / "random_forest_modal.pkl"
+        self.model_path = Path(model_path) if model_path else project_root / "pipeline_v4" / "calibration_and_diagnostics" / "modal_classification" / "artifacts" / "random_forest_modal.pkl"
         self.loaded_from_disk = False
         self._load_model()
 
@@ -447,7 +569,10 @@ class RandomForestRouteEvaluator:
             for (caid, num_trip), count in data.groupby(["caid", "num_trip"]).size().items():
                 raw_counts[self._trip_key(caid, num_trip)] = int(count)
         except Exception as exc:
-            print(f"[RandomForestRouteEvaluator] No se pudieron precargar conteos brutos: {exc}")
+            print(
+                f"[RandomForestRouteEvaluator] Unable to preload raw counts: {exc}",
+                flush=True,
+            )
         return raw_counts
 
     def _load_model(self):
@@ -473,7 +598,7 @@ class RandomForestRouteEvaluator:
                 setattr(self, name, classifier)
             self.clf = self.clf_n1
             self.loaded_from_disk = True
-            print(f"[RandomForestRouteEvaluator] Modelo ML v4 cargado desde {self.model_path}")
+            print("[RandomForestRouteEvaluator] ML v4 model loaded.", flush=True)
         except Exception as exc:
             raise RuntimeError(f"No se pudo cargar un PKL RF compatible desde {self.model_path}: {exc}") from exc
 
@@ -520,32 +645,51 @@ class RandomForestRouteEvaluator:
             start += pd.Timedelta(seconds=30)
         return values
 
-    def extract_features(self, hypotheses):
+    @staticmethod
+    def _require_columns(frame, columns, hypothesis):
+        missing = sorted(set(columns) - set(frame.columns))
+        if missing:
+            raise ServingContractError(
+                f"La hipótesis {hypothesis!r} no reproduce el contrato de entrenamiento; "
+                f"faltan columnas: {missing}"
+            )
+
+    def extract_features(self, hypotheses, serving_context=None):
+        if not isinstance(serving_context, TripServingContext):
+            raise ServingContractError(
+                "La inferencia ML requiere TripServingContext con pings GPS y distancias de snapping reales."
+            )
         hyps = {str(key).lower(): value for key, value in hypotheses.items()}
         drive = hyps.get("carro") if hyps.get("carro") is not None else hyps.get("bus")
         walk, metro = hyps.get("caminar"), hyps.get("metro")
         row = {}
 
         if drive is not None and not drive.empty:
+            self._require_columns(
+                drive,
+                {"Speed [km/h]", "highway", "near_bus_route", "near_subway_line"},
+                "Carro",
+            )
             speeds = self._speeds(drive)
             row.update(self._speed_stats("drive", speeds))
             row["drive_std_speed"] = float(np.std(speeds))
             row["drive_stop_frac"] = float(np.mean(speeds < 2.0))
-            highways = drive["highway"].fillna("unclassified").astype(str) if "highway" in drive else pd.Series([], dtype=str)
+            highways = drive["highway"].fillna("unclassified").astype(str)
             row["drive_highway_motorway_frac"] = float(np.mean(highways.str.contains("motorway|trunk|primary"))) if len(highways) else 0.0
             row["drive_highway_residential_frac"] = float(np.mean(highways.str.contains("residential"))) if len(highways) else 0.0
-            row["drive_near_bus_frac"] = float(np.mean(drive["near_bus_route"] == 1)) if "near_bus_route" in drive else 0.0
-            row["drive_near_metro_frac"] = float(np.mean(drive["near_subway_line"] == 1)) if "near_subway_line" in drive else 0.0
+            row["drive_near_bus_frac"] = float(np.mean(drive["near_bus_route"] == 1))
+            row["drive_near_metro_frac"] = float(np.mean(drive["near_subway_line"] == 1))
         else:
             for feature in RF_FEATURES:
                 if feature.startswith("drive_"):
                     row[feature] = 0.0
 
         if walk is not None and not walk.empty:
+            self._require_columns(walk, {"Speed [km/h]", "highway"}, "Caminar")
             speeds = self._speeds(walk)
             row.update(self._speed_stats("walk", speeds))
             row["walk_std_speed"] = float(np.std(speeds))
-            highways = walk["highway"].fillna("unclassified").astype(str) if "highway" in walk else pd.Series([], dtype=str)
+            highways = walk["highway"].fillna("unclassified").astype(str)
             row["walk_highway_footway_frac"] = float(np.mean(highways.str.contains("footway|pedestrian|steps|path|living_street"))) if len(highways) else 0.0
         else:
             for feature in RF_FEATURES:
@@ -553,25 +697,23 @@ class RandomForestRouteEvaluator:
                     row[feature] = 0.0
 
         if metro is not None and not metro.empty:
+            self._require_columns(metro, {"Speed [km/h]", "near_subway_line"}, "Metro")
             row.update(self._speed_stats("metro", self._speeds(metro)))
-            row["metro_near_metro_frac"] = float(np.mean(metro["near_subway_line"] == 1)) if "near_subway_line" in metro else 0.0
+            row["metro_near_metro_frac"] = float(np.mean(metro["near_subway_line"] == 1))
         else:
             for feature in RF_FEATURES:
                 if feature.startswith("metro_"):
                     row[feature] = 0.0
 
-        snap_source = next((frame for frame in (drive, walk, metro) if frame is not None and not frame.empty), None)
-        for network, default_mean, default_max, default_std in (("drive", 15.0, 30.0, 5.0), ("walk", 5.0, 10.0, 2.0)):
-            column = f"snap_dist_{network}"
-            if snap_source is not None and column in snap_source:
-                values = snap_source[column].fillna(0.0).to_numpy(dtype=float)
-                row[f"mean_snap_dist_{network}"] = float(np.mean(values))
-                row[f"max_snap_dist_{network}"] = float(np.max(values))
-                row[f"std_snap_dist_{network}"] = float(np.std(values))
-            else:
-                row[f"mean_snap_dist_{network}"] = default_mean
-                row[f"max_snap_dist_{network}"] = default_max
-                row[f"std_snap_dist_{network}"] = default_std
+        for network in ("drive", "walk"):
+            values = np.asarray(getattr(serving_context, f"snap_dist_{network}"), dtype=float)
+            if len(values) != serving_context.effective_ping_count or not np.isfinite(values).all():
+                raise ServingContractError(
+                    f"snap_dist_{network} debe contener una distancia finita por ping efectivo."
+                )
+            row[f"mean_snap_dist_{network}"] = float(np.mean(values))
+            row[f"max_snap_dist_{network}"] = float(np.max(values))
+            row[f"std_snap_dist_{network}"] = float(np.std(values))
 
         row["drive_near_bus_drift_decay"] = row["drive_near_bus_frac"] * np.exp(-row["mean_snap_dist_drive"] / 15.0)
         row["drive_near_bus_high_drift"] = row["drive_near_bus_frac"] * (1.0 - np.exp(-row["mean_snap_dist_drive"] / 15.0))
@@ -606,23 +748,17 @@ class RandomForestRouteEvaluator:
         row["walk_win_walk_regime_consec_run"] = self._max_run(np.array(walk_windows) > 0.7)
         return {feature: float(row.get(feature, 0.0)) for feature in RF_FEATURES}
 
-    def select_final_mode(self, hypotheses, subway_routes=None, bus_routes=None):
+    def select_final_mode(self, hypotheses, subway_routes=None, bus_routes=None, *, serving_context=None):
         if not hypotheses:
             return None, None, 0.0, {}
+        if not isinstance(serving_context, TripServingContext):
+            raise ServingContractError("Falta TripServingContext para aplicar el guardrail GPS.")
         any_frame = next(iter(hypotheses.values()))
-        num_pings = len(any_frame)
-        caid_column = "caid" if "caid" in any_frame else "id_usuario" if "id_usuario" in any_frame else None
-        trip_column = "num_trip" if "num_trip" in any_frame else "trip" if "trip" in any_frame else None
-        pct_conserved = 100.0
-        if caid_column and trip_column and len(any_frame):
-            key = self._trip_key(any_frame[caid_column].iloc[0], any_frame[trip_column].iloc[0])
-            raw_count = self.raw_counts.get(key)
-            if raw_count:
-                pct_conserved = 100.0 * num_pings / raw_count
-        if num_pings < MIN_EFFECTIVE_PINGS or pct_conserved < MIN_PCT_CONSERVED:
+        if (serving_context.effective_ping_count < MIN_EFFECTIVE_PINGS or
+                serving_context.pct_pings_conserved < MIN_PCT_CONSERVED):
             return "Calidad insuficiente", None, 0.0, {mode: 0.0 for mode in self.modos}
 
-        extracted = self.extract_features(hypotheses)
+        extracted = self.extract_features(hypotheses, serving_context=serving_context)
         missing = [name for name in set(self.n1_features + self.n2_features + self.n3_features) if name not in extracted]
         if missing:
             raise ValueError(f"Faltan variables requeridas para inferencia: {sorted(missing)}")
@@ -663,8 +799,10 @@ class RandomForestRouteEvaluator:
         selected["modo_transporte"] = mode
         return mode, selected, diagnostics.get(mode, 0.0), diagnostics
 
-    def evaluate_with_contract(self, hypotheses, subway_routes=None, bus_routes=None):
-        mode, selected, probability, probabilities = self.select_final_mode(hypotheses, subway_routes, bus_routes)
+    def evaluate_with_contract(self, hypotheses, subway_routes=None, bus_routes=None, *, serving_context=None):
+        mode, selected, probability, probabilities = self.select_final_mode(
+            hypotheses, subway_routes, bus_routes, serving_context=serving_context
+        )
         accepted = mode not in {None, "Calidad insuficiente"}
         return {
             "final_class": mode,
@@ -694,7 +832,7 @@ class HybridRouteEvaluator(RandomForestRouteEvaluator):
         self.bus_threshold = BUS_PROBABILITY_THRESHOLD
         self.raw_counts = self._load_raw_counts()
         project_root = Path(__file__).resolve().parents[2]
-        self.model_path = Path(model_path) if model_path else project_root / "Inputs" / "GPS User Data" / "modal_classifier_hybrid_v1.pkl"
+        self.model_path = Path(model_path) if model_path else project_root / "pipeline_v4" / "calibration_and_diagnostics" / "modal_classification" / "artifacts" / "modal_classifier_hybrid_v1.pkl"
         self.loaded_from_disk = False
         self._load_hybrid_model()
 
@@ -727,7 +865,7 @@ class HybridRouteEvaluator(RandomForestRouteEvaluator):
             self.bus_threshold = threshold
             self.clf = self.clf_n1
             self.loaded_from_disk = True
-            print(f"[HybridRouteEvaluator] Modelo híbrido cargado desde {self.model_path}")
+            print("[HybridRouteEvaluator] Hybrid model loaded.", flush=True)
         except Exception as exc:
             raise RuntimeError(f"No se pudo cargar el modelo híbrido compatible desde {self.model_path}: {exc}") from exc
 
@@ -743,24 +881,20 @@ class GuardrailedBayesianRouteEvaluator(BayesianRouteEvaluator):
 
     _trip_key = staticmethod(RandomForestRouteEvaluator._trip_key)
 
-    def select_final_mode(self, hypotheses, subway_routes, bus_routes):
+    def select_final_mode(self, hypotheses, subway_routes, bus_routes, *, serving_context=None):
         if not hypotheses:
             return None, None, 0.0, {}
-        frame = next(iter(hypotheses.values()))
-        num_pings = len(frame)
-        caid_col = "caid" if "caid" in frame else "id_usuario" if "id_usuario" in frame else None
-        trip_col = "num_trip" if "num_trip" in frame else "trip" if "trip" in frame else None
-        pct = 100.0
-        if caid_col and trip_col and num_pings:
-            raw = self.raw_counts.get(self._trip_key(frame[caid_col].iloc[0], frame[trip_col].iloc[0]))
-            if raw:
-                pct = 100.0 * num_pings / raw
-        if num_pings < MIN_EFFECTIVE_PINGS or pct < MIN_PCT_CONSERVED:
+        if not isinstance(serving_context, TripServingContext):
+            raise ServingContractError("Falta TripServingContext para aplicar el guardrail GPS.")
+        if (serving_context.effective_ping_count < MIN_EFFECTIVE_PINGS or
+                serving_context.pct_pings_conserved < MIN_PCT_CONSERVED):
             return "Calidad insuficiente", None, 0.0, {mode: 0.0 for mode in self.modos}
         return super().select_final_mode(hypotheses, subway_routes, bus_routes)
 
-    def evaluate_with_contract(self, hypotheses, subway_routes, bus_routes):
-        mode, selected, probability, probabilities = self.select_final_mode(hypotheses, subway_routes, bus_routes)
+    def evaluate_with_contract(self, hypotheses, subway_routes, bus_routes, *, serving_context=None):
+        mode, selected, probability, probabilities = self.select_final_mode(
+            hypotheses, subway_routes, bus_routes, serving_context=serving_context
+        )
         accepted = mode not in {None, "Calidad insuficiente"}
         return {
             "final_class": mode, "probabilities": probabilities,
@@ -789,7 +923,10 @@ def create_modal_evaluator(classifier=None, enable_bayes_fallback=False):
         return RandomForestRouteEvaluator()
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         if enable_bayes_fallback:
-            print(f"[ModalClassification] RF no disponible; fallback Bayes habilitado: {exc}")
+            print(
+                f"[ModalClassification] RF unavailable; Bayesian fallback enabled: {exc}",
+                flush=True,
+            )
             return BayesianRouteEvaluator()
         raise RuntimeError(
             "No fue posible inicializar ML v4 y el fallback Bayes está deshabilitado. "

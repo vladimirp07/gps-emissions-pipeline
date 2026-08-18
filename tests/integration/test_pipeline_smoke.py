@@ -7,21 +7,18 @@ import numpy as np
 import pandas as pd
 
 from pipeline_v4.src.emissions import calculate_emissions
-from pipeline_v4.src.modal_classification import create_modal_evaluator
+from pipeline_v4.src.modal_classification import TripServingContext, create_modal_evaluator
 from pipeline_v4.src.pipeline_contracts import validate_routing_output
 from pipeline_v4.src.routing import _finalize_routing_contract
 from pipeline_v4.src.segmentation import assign_trips
 
-ROOT = Path(__file__).resolve().parents[2]
-SMOKE = ROOT / "outputs" / "production_smoke_tests"
-
-
 class TestPipelineSmoke(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        SMOKE.mkdir(parents=True, exist_ok=True)
-        cls.evaluator = create_modal_evaluator("hybrid")
         cls.tmp = tempfile.TemporaryDirectory()
+        cls.smoke = Path(cls.tmp.name) / "production_smoke_tests"
+        cls.smoke.mkdir(parents=True, exist_ok=True)
+        cls.evaluator = create_modal_evaluator("hybrid")
         cls.lookup = Path(cls.tmp.name) / "moves.parquet"
         pollutants = ["CO", "CO2", "CO2_Equiv", "HC", "NOx", "PM10", "PM25"]
         rows = []
@@ -61,8 +58,12 @@ class TestPipelineSmoke(unittest.TestCase):
                 "Caminar": frame(rng.uniform(1, 25), rng.choice(["footway", "path", "residential"]), rng.random() * .2, rng.random() * .2, rng.uniform(1, 100), rng.uniform(1, 30)),
                 "Metro": frame(rng.uniform(10, 80), "railway", 0, rng.random(), rng.uniform(1, 100), rng.uniform(1, 30)),
             }
-            key = f"SMOKE{case}_1"; self.evaluator.raw_counts[key] = 20
-            result = self.evaluator.evaluate_with_contract(hypotheses)
+            context = TripServingContext(
+                20, 20,
+                tuple(hypotheses["Carro"]["snap_dist_drive"].astype(float)),
+                tuple(hypotheses["Carro"]["snap_dist_walk"].astype(float)),
+            )
+            result = self.evaluator.evaluate_with_contract(hypotheses, serving_context=context)
             mode = result["final_class"]
             if mode in {"Carro", "Bus", "Metro", "Caminar"} and mode not in found:
                 found[mode] = (result, hypotheses)
@@ -99,16 +100,17 @@ class TestPipelineSmoke(unittest.TestCase):
             output_rows.append({"physical_trip_id": emitted.physical_trip_id.iloc[0], "mode": expected,
                                 "segments": len(emitted), "distance_m": float(emitted.distance_m.sum()),
                                 "total_CO2_g": float(emitted.Total_CO2_g.sum()), "status": "PASS"})
-        pd.DataFrame(output_rows).to_csv(SMOKE / "end_to_end_results.csv", index=False)
-        (SMOKE / "smoke_test.log").write_text("pipeline_v4_production end-to-end: PASS\n", encoding="utf-8")
+        pd.DataFrame(output_rows).to_csv(self.smoke / "end_to_end_results.csv", index=False)
+        (self.smoke / "smoke_test.log").write_text("pipeline_v4_production end-to-end: PASS\n", encoding="utf-8")
 
     def test_degraded_guardrail_and_explicit_failure(self):
         hypotheses = next(iter(self._representative_hypotheses().values()))[1]
         short = {name: frame.iloc[:10].copy() for name, frame in hypotheses.items()}
-        result = self.evaluator.evaluate_with_contract(short)
+        context = TripServingContext(20, 10, (10.0,) * 10, (5.0,) * 10)
+        result = self.evaluator.evaluate_with_contract(short, serving_context=context)
         self.assertEqual(result["final_class"], "Calidad insuficiente")
         self.assertEqual(result["rejection_reason"], "quality_guardrail")
         failure = {"case": "guardrail", "status": "rejected", "cause": result["rejection_reason"]}
-        (SMOKE / "failures.json").write_text(json.dumps([failure], indent=2), encoding="utf-8")
+        (self.smoke / "failures.json").write_text(json.dumps([failure], indent=2), encoding="utf-8")
 
 

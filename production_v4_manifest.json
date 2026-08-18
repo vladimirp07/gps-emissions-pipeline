@@ -1,8 +1,8 @@
 {
   "release": "pipeline_v4_production",
   "status": "READY FOR CONTROLLED PRODUCTION",
-  "date": "2026-07-15",
-  "release_commit": "4d876b50c2ece4c015eabaadab98aad97ce9040c",
+  "date": "2026-08-18",
+  "source_state": "validated optimized V2 production baseline",
   "runtime": {
     "python": "3.12.6",
     "scikit_learn": "1.5.2",
@@ -23,9 +23,26 @@
     "rate_unit": "g/km",
     "distance_unit": "km",
     "total_unit": "g",
-    "unit_status": "provisional_warning_pending_source_confirmation"
+    "unit_status": "configured_production_contract"
   },
-  "tests": {"pytest_passed": 26, "pytest_failed": 0, "notebook_clean_kernel": "PASS", "end_to_end_four_modes": "PASS"},
+  "routing": {
+    "version": "v2",
+    "default_workers": 2,
+    "max_lookahead_skipped_pings": 10,
+    "endpoint_preservation": "v2",
+    "rollback": "v1",
+    "performance_baseline": "optimized_exact_equivalence_2026-08-18",
+    "performance_optimizations": [
+      "compressed native incident-edge index",
+      "batched endpoint snapping",
+      "bounded deterministic shortest-path cache",
+      "vectorized candidate list assembly",
+      "persistent drive/walk spatial indexes",
+      "run-scoped infrastructure proximity cache",
+      "thread-safe lazy edge-attribute cache"
+    ]
+  },
+  "tests": {"pytest_passed": 93, "pytest_failed": 0, "exact_equivalence_smoke": "PASS", "notebook_clean_kernel": "PASS", "end_to_end_four_modes": "PASS", "final_real_input_smoke": "PASS"},
   "guardrail": {"minimum_effective_pings": 15, "minimum_percent_conserved": 30.0},
-  "known_limitations": ["MOVES rate unit pending source confirmation", "legacy router does not persist numeric snap distance per subsegment"]
+  "known_limitations": ["legacy router does not persist numeric snap distance per subsegment", "current sjoin_nearest candidate generation returns nearest edge ties rather than true K nearest edges", "multi-candidate sequence scoring remains diagnostic because it must preserve exact rollback and penalized-node state"]
 }

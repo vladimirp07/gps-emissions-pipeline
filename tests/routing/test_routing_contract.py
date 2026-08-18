@@ -41,4 +41,3 @@ class TestRoutingContract(unittest.TestCase):
         self.assertIn("invalid_distance", errors)
         self.assertIn("invalid_speed", errors)
 
-

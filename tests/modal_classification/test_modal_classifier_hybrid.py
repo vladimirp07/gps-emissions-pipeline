@@ -18,7 +18,7 @@ except ImportError:  # Cache serialized with NumPy 2.x, runtime on NumPy 1.x
 from pipeline_v4.src import config
 from pipeline_v4.src.modal_classification import (
     GuardrailedBayesianRouteEvaluator, HybridRouteEvaluator,
-    RandomForestRouteEvaluator, create_modal_evaluator,
+    RandomForestRouteEvaluator, TripServingContext, create_modal_evaluator,
 )
 from pipeline_v4.src.random_forest_contract import (
     BUS_PROBABILITY_THRESHOLD, N1_FEATURES, N2_FEATURES, N3_FEATURES,
@@ -26,9 +26,6 @@ from pipeline_v4.src.random_forest_contract import (
 
 ROOT = Path(__file__).resolve().parents[2]
 GPS = ROOT / "Inputs" / "GPS User Data"
-CACHE = GPS / "cache_rutas_completas_expanded"
-
-
 class TestHybridModalProduction(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -44,10 +41,16 @@ class TestHybridModalProduction(unittest.TestCase):
         self.assertIsInstance(self.bayes, GuardrailedBayesianRouteEvaluator)
 
     def test_three_persisted_resources_load(self):
-        self.assertTrue((GPS / "modal_classifier_hybrid_v1.pkl").is_file())
-        self.assertTrue((GPS / "random_forest_modal.pkl").is_file())
+        self.assertTrue((config.MODAL_ARTIFACTS_DIR / "modal_classifier_hybrid_v1.pkl").is_file())
+        self.assertTrue((config.MODAL_ARTIFACTS_DIR / "random_forest_modal.pkl").is_file())
         bayes_json = ROOT / "pipeline_v4/calibration_and_diagnostics/modal_classification/calibration/bayes/matrices_optimas.json"
         self.assertIsInstance(json.loads(bayes_json.read_text(encoding="utf-8")), dict)
+
+    def test_routed_calibration_caches_are_derived_outputs(self):
+        self.assertTrue(config.MODAL_ROUTE_CACHE_BASELINE.is_relative_to(config.OUTPUTS_DIR))
+        self.assertTrue(config.MODAL_ROUTE_CACHE_EXPANDED.is_relative_to(config.OUTPUTS_DIR))
+        self.assertFalse(config.MODAL_ROUTE_CACHE_BASELINE.is_relative_to(config.INPUTS_DIR))
+        self.assertFalse(config.MODAL_ROUTE_CACHE_EXPANDED.is_relative_to(config.INPUTS_DIR))
 
     def test_per_level_feature_contract_and_threshold(self):
         self.assertEqual(len(N1_FEATURES), 16)
@@ -70,11 +73,17 @@ class TestHybridModalProduction(unittest.TestCase):
         })
         return {"Carro": frame}
 
+    @staticmethod
+    def _context(effective=20, raw=20):
+        return TripServingContext(raw, effective, (10.0,) * effective, (5.0,) * effective)
+
     def test_hybrid_end_to_end_for_all_degradations(self):
         for deg in ("Raw", "L1", "L2", "L3"):
             hypotheses = self._hypotheses(deg=deg)
             self.hybrid.raw_counts["AAF_1"] = len(next(iter(hypotheses.values())))
-            mode, frame, probability, diagnostics = self.hybrid.select_final_mode(hypotheses)
+            mode, frame, probability, diagnostics = self.hybrid.select_final_mode(
+                hypotheses, serving_context=self._context()
+            )
             self.assertIn(mode, self.hybrid.modos)
             self.assertIsNotNone(frame)
             self.assertGreaterEqual(probability, 0.0)
@@ -83,10 +92,15 @@ class TestHybridModalProduction(unittest.TestCase):
     def test_guardrail_is_shared(self):
         short = {key: frame.iloc[:10].copy() for key, frame in self._hypotheses().items()}
         for evaluator in (self.hybrid, self.rf, self.bayes):
-            self.assertEqual(evaluator.select_final_mode(short, None, None)[0], "Calidad insuficiente")
+            self.assertEqual(
+                evaluator.select_final_mode(
+                    short, None, None, serving_context=self._context(effective=10, raw=20)
+                )[0],
+                "Calidad insuficiente",
+            )
 
     def test_grouped_degradations_and_mixed_exclusion(self):
-        with (GPS / "datos_entrenamiento_ml_expanded.pkl").open("rb") as handle:
+        with (config.MODAL_ARTIFACTS_DIR / "datos_entrenamiento_ml_expanded.pkl").open("rb") as handle:
             cache = pickle.load(handle)
         scenarios = {}
         for item in cache:
@@ -100,10 +114,12 @@ class TestHybridModalProduction(unittest.TestCase):
                 mixed.add(f"{caid}_{int(float(trip))}")
         self.assertTrue(set(scenarios).isdisjoint(mixed))
 
-    def test_orchestrator_only_uses_factory_and_configuration(self):
-        notebook = json.loads((ROOT / "pipeline_v4/orchestrator.ipynb").read_text(encoding="utf-8"))
+    def test_canonical_notebook_uses_production_workflow(self):
+        notebook = json.loads(
+            (ROOT / "notebooks/GPS_preprocessing_and_pipeline_v4.ipynb").read_text(encoding="utf-8")
+        )
         source = "".join("".join(cell.get("source", [])) for cell in notebook["cells"])
-        self.assertIn("create_modal_evaluator(config.MODAL_CLASSIFIER)", source)
+        self.assertIn("run_production", source)
         self.assertNotIn("RandomForestRouteEvaluator(", source)
         self.assertNotIn("HybridRouteEvaluator(", source)
         self.assertNotIn("BayesianRouteEvaluator(", source)
@@ -121,11 +137,11 @@ class TestHybridModalProduction(unittest.TestCase):
     def test_missing_feature_fails_clearly(self):
         hypotheses = self._hypotheses()
         self.hybrid.raw_counts["AAF_1"] = len(next(iter(hypotheses.values())))
-        incomplete = self.hybrid.extract_features(hypotheses)
+        incomplete = self.hybrid.extract_features(hypotheses, serving_context=self._context())
         incomplete.pop(N1_FEATURES[0])
         with patch.object(self.hybrid, "extract_features", return_value=incomplete):
             with self.assertRaisesRegex(ValueError, "Faltan variables requeridas"):
-                self.hybrid.select_final_mode(hypotheses)
+                self.hybrid.select_final_mode(hypotheses, serving_context=self._context())
 
 
 if __name__ == "__main__":

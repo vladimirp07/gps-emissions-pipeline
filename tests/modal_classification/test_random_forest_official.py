@@ -22,6 +22,7 @@ from pipeline_v4.src import config
 from pipeline_v4.src.modal_classification import (
     HybridRouteEvaluator,
     RandomForestRouteEvaluator,
+    TripServingContext,
     create_modal_evaluator,
 )
 from pipeline_v4.src.random_forest_contract import (
@@ -44,9 +45,9 @@ class TestRandomForestOfficial(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.evaluator = RandomForestRouteEvaluator()
-        with (config.GPS_DIR / "random_forest_modal.pkl").open("rb") as handle:
+        with (config.MODAL_ARTIFACTS_DIR / "random_forest_modal.pkl").open("rb") as handle:
             cls.model = pickle.load(handle)
-        with (config.GPS_DIR / "datos_entrenamiento_ml.pkl").open("rb") as handle:
+        with (config.MODAL_ARTIFACTS_DIR / "datos_entrenamiento_ml.pkl").open("rb") as handle:
             cls.cache = pickle.load(handle)
 
     def test_feature_contract_matches_training_inference_notebook_and_pkl(self):
@@ -126,7 +127,10 @@ class TestRandomForestOfficial(unittest.TestCase):
             "near_subway_line": [0] * 20,
         })
         self.evaluator.raw_counts["TEST_1"] = 20
-        mode, selected, probability, probabilities = self.evaluator.select_final_mode({"Carro": frame})
+        context = TripServingContext(20, 20, (10.0,) * 20, (5.0,) * 20)
+        mode, selected, probability, probabilities = self.evaluator.select_final_mode(
+            {"Carro": frame}, serving_context=context
+        )
         self.assertIn(mode, {"Carro", "Bus", "Metro", "Caminar"})
         self.assertIsNotNone(selected)
         self.assertGreaterEqual(probability, 0.0)
@@ -134,7 +138,10 @@ class TestRandomForestOfficial(unittest.TestCase):
 
     def test_quality_guardrail(self):
         short = pd.DataFrame({"Speed [km/h]": [0.0] * 5})
-        mode, selected, _, _ = self.evaluator.select_final_mode({"Caminar": short})
+        context = TripServingContext(5, 5, (10.0,) * 5, (5.0,) * 5)
+        mode, selected, _, _ = self.evaluator.select_final_mode(
+            {"Caminar": short}, serving_context=context
+        )
         self.assertEqual(mode, "Calidad insuficiente")
         self.assertIsNone(selected)
 
@@ -144,7 +151,10 @@ class TestRandomForestOfficial(unittest.TestCase):
             "Speed [km/h]": [20.0] * 20,
         })
         self.evaluator.raw_counts["TEST_2"] = 100
-        mode, selected, _, _ = self.evaluator.select_final_mode({"Carro": low_retention})
+        context = TripServingContext(100, 20, (10.0,) * 20, (5.0,) * 20)
+        mode, selected, _, _ = self.evaluator.select_final_mode(
+            {"Carro": low_retention}, serving_context=context
+        )
         self.assertEqual(mode, "Calidad insuficiente")
         self.assertIsNone(selected)
 

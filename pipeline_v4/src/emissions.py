@@ -19,7 +19,7 @@ def calculate_emissions(df_rutas_in, file_moves_path):
     if contract_errors:
         raise ValueError(f"Entrada de emisiones incompatible: {contract_errors}")
         
-    print("Iniciando Módulo 3: Cálculo de emisiones...")
+    print("[Emissions] Starting emissions calculation...", flush=True)
     if config.EMISSION_RATE_DISTANCE_UNIT != 'g/km':
         raise RuntimeError("Producción v4 requiere tasas explícitas en g/km.")
     
@@ -149,6 +149,6 @@ def calculate_emissions(df_rutas_in, file_moves_path):
     df_final['Total_PM2.5_g'] = df_final['Total_PM25_g']
         
     df_final['fecha_kepler'] = df_final['local_timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S')
-    print("Módulo 3 completado exitosamente.")
+    print("[Emissions] Emissions calculation complete.", flush=True)
     
     return df_final

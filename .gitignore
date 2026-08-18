@@ -53,6 +53,13 @@ legacy/
 /Inputs/GPS User Data/prueba_dummy_3.parquet
 /Outputs/Final Outputs/
 /Outputs/Intermediate Outputs/
+/Outputs/runs/
+/Outputs/calibration_cache/
+/Outputs/diagnostics/
+/Outputs/legacy/
+/Inputs/GPS User Data/Top_users_DIC.parquet
+/Inputs/Preprocessed GPS Emissions Data for tests/
+/Inputs/Tier 1-3 Emissions Inventories Results/
 /Inputs/Supporting input data for bus routes/
 /Inputs/rutas_buses_ZMM_oficial.geojson
 /Inputs/rutas_buses_monterrey.csv
@@ -86,6 +93,8 @@ visual_content/
 **/artifacts_local/
 **/tests_local/
 /local_reports/
+/docs_private/
+/local_notes/
 /Outputs/production_smoke_tests/
 /outputs/production_smoke_tests/
 **/*confusion_matrix*.png
@@ -94,3 +103,6 @@ visual_content/
 # 8. Local Calibration Experiments Images & Figures
 pipeline_v4/calibration_and_diagnostics/routing_algorithm_calibration/*/*.png
 pipeline_v4/calibration_and_diagnostics/routing_algorithm_calibration/*.png
+pipeline_v4/calibration_and_diagnostics/routing_legacy/**/experimental_cache/
+pipeline_v4/calibration_and_diagnostics/routing_legacy/**/figures/
+pipeline_v4/calibration_and_diagnostics/routing_legacy/**/figures_*/

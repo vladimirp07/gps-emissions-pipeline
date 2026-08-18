@@ -1,0 +1,12 @@
+# Production environment for pipeline_v4 (Python 3.12.6).
+numpy==1.26.4
+pandas==2.2.3
+geopandas==0.14.4
+shapely==2.0.6
+pyproj==3.7.0
+networkx==3.3
+igraph==1.0.0
+scikit-learn==1.5.2
+pyarrow==21.0.0
+joblib==1.4.2
+tqdm==4.67.1
