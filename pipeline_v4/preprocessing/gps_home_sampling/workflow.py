@@ -36,7 +36,7 @@ def _first(df, names, required=True):
         if name in df.columns:
             return name
     if required:
-        raise KeyError(f"No se encontró ninguna columna equivalente a {names}")
+        raise KeyError(f"No column matching any of {names} was found")
     return None
 
 

@@ -64,15 +64,11 @@ flowchart LR
 │   │   ├── run_workflow.py         # Run ID, scoped outputs, and root manifest
 │   │   └── emissions.py            # Emission-factor matching and calculations
 │   └── calibration_and_diagnostics/
-│       ├── routing_algorithm_calibration/ # Routing sensitivity analysis and calibration
-│       ├── routing_legacy/                # Archived MATLAB campaigns; never production
-│       ├── gps_survey_data_cleaning/      # Survey parsing, diagnostics, and cleaning
+│       ├── legacy_routing/                # V1-compatible rollback implementation
 │       └── modal_classification/
-│           ├── notebooks/                 # Reproducible modal-classification notebook
-│           └── calibration/
-│               ├── random_forest/         # Random Forest training utilities
-│               ├── hybrid/                # Hybrid-cascade evaluation utilities
-│               └── bayes/                 # Bayesian calibration utilities
+│           ├── artifacts/                 # Versioned production serving artifacts
+│           ├── notebooks/                 # Reproducible classifier validation
+│           └── calibration/               # Required model-contract sources
 ├── tests/
 │   ├── routing/                    # Routing contract tests
 │   ├── modal_classification/       # Official modal-classification tests
@@ -80,11 +76,9 @@ flowchart LR
 │   └── integration/                # End-to-end smoke tests
 ├── notebooks/
 │   └── GPS_preprocessing_and_pipeline_v4.ipynb
-├── archive/
-│   └── legacy_notebooks/           # Historical/deprecated notebook interfaces
 ├── Inputs/
 │   ├── Infrastructure/             # OpenStreetMap graphs and routing caches
-│   ├── GPS User Data/              # GPS datasets and persisted modal models
+│   ├── GPS User Data/              # Local GPS datasets (not versioned)
 │   └── Emission rates/             # Emission-factor lookup tables
 └── Outputs/runs/<run_id>/          # Isolated preprocessing/pipeline outputs per run
 ```
@@ -120,7 +114,11 @@ NetworkX and iGraph cache files should be pre-built under `Inputs/Infrastructure
 For the integrated supplied-sample workflow:
 
 1. Activate the project environment and install the required dependencies.
-2. Verify that GPS data, transportation networks, model artifacts, and emission-factor tables are available under `Inputs/`.
+2. Place the supplied GPS Parquet under `Inputs/GPS User Data/` and the matching
+   AGEB boundary file under `Inputs/Infrastructure/AGEB/`. Build or copy the
+   local transportation-network caches under
+   `Inputs/Infrastructure/Cache_Optimizado/`. These external inputs are not
+   versioned. The serving models and emission-factor table are included.
 3. Review the paths in `notebooks/GPS_preprocessing_and_pipeline_v4.ipynb`
    and the runtime settings in `pipeline_v4/src/config.py`. Production defaults
    to `ROUTER_VERSION=v2`; set `ROUTER_VERSION=v1` only for the stable rollback.
@@ -137,13 +135,10 @@ For the integrated supplied-sample workflow:
    English-schema route/emissions output, `trip_ledger.parquet`, and
    `manifest.json` under that run only.
 
-The former `pipeline_v4/orchestrator.ipynb` is retained only for historical
-reproducibility. It is deprecated and is not a supported production entry point.
-
 The root-level `notebooks/` directory is intentional: it contains user/research
 interfaces, while `pipeline_v4/` contains importable production modules.
 
-Calibration and diagnostic utilities are available under `pipeline_v4/calibration_and_diagnostics/`. The official modal-classification notebook is located at:
+The versioned modal-classification validation notebook is located at:
 
 ```text
 pipeline_v4/calibration_and_diagnostics/modal_classification/notebooks/playground_modal_classifier.ipynb

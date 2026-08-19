@@ -7,8 +7,8 @@ from . import config
 
 def calculate_emissions(df_rutas_in, file_moves_path):
     """
-    Cruza la trayectoria ruteada con las tasas de emisión de MOVES
-    y calcula el inventario de emisiones (densidad y masa total) para todos los contaminantes.
+    Match routed trajectory segments to MOVES rates and calculate emission
+    density and total mass for every configured pollutant.
     """
     df_rutas = df_rutas_in.copy()
     
@@ -17,20 +17,20 @@ def calculate_emissions(df_rutas_in, file_moves_path):
 
     contract_errors = validate_emissions_input(df_rutas)
     if contract_errors:
-        raise ValueError(f"Entrada de emisiones incompatible: {contract_errors}")
+        raise ValueError(f"Incompatible emissions input: {contract_errors}")
         
     print("[Emissions] Starting emissions calculation...", flush=True)
     if config.EMISSION_RATE_DISTANCE_UNIT != 'g/km':
-        raise RuntimeError("Producción v4 requiere tasas explícitas en g/km.")
+        raise RuntimeError("Production V4 requires explicit g/km rates.")
     
     COLUMNA_MODO = 'modo_transporte' 
     COLUMNA_VELOCIDAD = 'Speed [km/h]'
     COLUMNA_DISTANCIA = 'distance_m'
     
-    # Cargamos las tasas de MOVES
+    # Load the MOVES rate table.
     df_emisiones_raw = pd.read_parquet(file_moves_path)
     
-    # Todos los contaminantes criterio definidos en el Módulo 3
+    # Criteria pollutants and greenhouse-gas fields defined by the contract.
     POLLUTANTS = ['CO', 'CO2', 'CO2_Equiv', 'HC', 'NOx', 'PM10', 'PM25']
     
     OSM_TO_MOVES_ROAD = {
@@ -40,11 +40,11 @@ def calculate_emissions(df_rutas_in, file_moves_path):
         'routing_error': 5, 'parada_inactiva': 5
     }
     
-    # 1. PREPARACIÓN DE VARIABLES PARA EL CRUCE
+    # 1. Prepare lookup variables.
     df_rutas['orden_original'] = range(len(df_rutas))
     df_rutas['local_timestamp'] = pd.to_datetime(df_rutas['local_timestamp'])
     
-    # Extracción de Mes, Hora y Día (Tipo de día MOVES: 5=Semana, 2=Fin de semana)
+    # MOVES month, hour, and day type (5=weekday, 2=weekend).
     df_rutas['Month'] = df_rutas['local_timestamp'].dt.month
     df_rutas['Hour'] = df_rutas['local_timestamp'].dt.hour + 1
     df_rutas['Day'] = np.where(df_rutas['local_timestamp'].dt.dayofweek < 5, 5, 2)
@@ -53,7 +53,7 @@ def calculate_emissions(df_rutas_in, file_moves_path):
     df_rutas['road_lookup_status'] = np.where(mapped_road.isna(), 'default_road_5', 'mapped')
     df_rutas['Road'] = mapped_road.fillna(5).astype(int)
     
-    # Clasificación de Source ID de MOVES (0=No motorizado/Parada, 21=Auto/Carro, 42=Autobús/Bus)
+    # MOVES source ID (0=non-motorized/stop, 21=car, 42=bus).
     condiciones = [
         df_rutas['trip'] < 0,
         df_rutas[COLUMNA_MODO].astype(str).str.contains('(?i)carro|auto', na=False),
@@ -62,7 +62,7 @@ def calculate_emissions(df_rutas_in, file_moves_path):
     opciones = [0, 21, 42]
     df_rutas['Source'] = np.select(condiciones, opciones, default=0)
     
-    # Clasificación en SpeedBins de MOVES (Convertido de km/h a mph)
+    # MOVES speed-bin classification after converting km/h to mph.
     df_rutas['avg_speed_mph'] = df_rutas[COLUMNA_VELOCIDAD] * 0.621371
     bins = [0, 2.5, 7.5, 12.5, 17.5, 22.5, 27.5, 32.5, 37.5, 42.5, 47.5, 52.5, 57.5, 62.5, 67.5, 72.5, float('inf')]
     df_rutas['SpeedBin'] = pd.cut(df_rutas['avg_speed_mph'], bins=bins, labels=False, right=False).fillna(0).astype(int) + 1
@@ -85,13 +85,13 @@ def calculate_emissions(df_rutas_in, file_moves_path):
         df_motorizados[POLLUTANTS[0]].notna(), 'exact', 'pending_imputation'
     )
     
-    # Lógica de Imputación en Cascada si hay registros faltantes
+    # Cascaded imputation for missing lookup records.
     mask_faltantes = df_motorizados[POLLUTANTS[0]].isna()
     if mask_faltantes.any():
         promedios_sb = df_emisiones.groupby(['Source', 'SpeedBin'])[POLLUTANTS].mean().reset_index()
         promedios_source = df_emisiones.groupby('Source')[POLLUTANTS].mean().reset_index()
         
-        # Nivel 2: Imputación por Curva de Velocidad (SpeedBin)
+        # Level 2: impute from the speed-bin curve.
         fuentes_unicas = df_emisiones['Source'].unique()
         idx_completo = pd.MultiIndex.from_product([fuentes_unicas, range(1, 17)], names=['Source', 'SpeedBin'])
         df_curvas = promedios_sb.set_index(['Source', 'SpeedBin']).reindex(idx_completo).groupby(level='Source').ffill().groupby(level='Source').bfill().reset_index()
@@ -99,7 +99,7 @@ def calculate_emissions(df_rutas_in, file_moves_path):
         
         df_motorizados = pd.merge(df_motorizados, df_curvas, on=['Source', 'SpeedBin'], how='left')
         
-        # Nivel 3: Imputación Global por Tipo de Vehículo
+        # Level 3: global imputation by vehicle type.
         df_global = promedios_source.rename(columns={p: f"{p}_global" for p in POLLUTANTS})
         df_motorizados = pd.merge(df_motorizados, df_global, on='Source', how='left')
         
@@ -115,7 +115,7 @@ def calculate_emissions(df_rutas_in, file_moves_path):
             df_motorizados.loc[missing_absolute, 'emission_lookup_status'] = 'missing_zero_fallback'
             df_motorizados[p] = df_motorizados[p].fillna(0.0)
             
-        # Limpieza de columnas auxiliares de imputación
+        # Remove auxiliary imputation columns.
         cols_drop = [f"{p}_curve" for p in POLLUTANTS] + [f"{p}_global" for p in POLLUTANTS]
         df_motorizados = df_motorizados.drop(columns=[c for c in cols_drop if c in df_motorizados.columns], errors='ignore')
 
@@ -126,13 +126,13 @@ def calculate_emissions(df_rutas_in, file_moves_path):
         
     df_final = pd.concat([df_motorizados, df_no_motorizados], ignore_index=True).sort_values('orden_original').reset_index(drop=True)
     
-    # 3. CÁLCULO DE MASA TOTAL
+    # 3. Calculate total mass.
     df_final['distance_km_calc'] = df_final[COLUMNA_DISTANCIA] / 1000.0
     OCUPACION_MEDIA_BUS = 25
     
     for p in POLLUTANTS:
         df_final[f"Densidad_{p}_g_km"] = df_final[p]
-        # Si es Autobús, la masa se prorratea entre el factor de ocupación media (25 personas)
+        # Prorate Bus mass using the configured average occupancy (25 people).
         df_final[f"Total_{p}_g"] = np.where(
             df_final['Source'] == 42, 
             (df_final[f"Densidad_{p}_g_km"] * df_final['distance_km_calc']) / OCUPACION_MEDIA_BUS,

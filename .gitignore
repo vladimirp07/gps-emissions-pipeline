@@ -100,6 +100,25 @@ visual_content/
 **/*confusion_matrix*.png
 **/*matriz_confusion*.png
 
+# Local development history and diagnostics excluded from the production release
+/archive/random_forest_experiments/
+/archive/tests/
+/pipeline_v4/orchestrator.ipynb
+/pipeline_v4/src/bayes_classifier.py.bak
+/pipeline_v4/calibration_and_diagnostics/gps_survey_data_cleaning/
+/pipeline_v4/calibration_and_diagnostics/routing_algorithm_calibration/
+/pipeline_v4/calibration_and_diagnostics/modal_classification/calibration/bayes/Avances de Alejandro/
+/pipeline_v4/calibration_and_diagnostics/modal_classification/calibration/bayes/analisis_estancamiento_y_oportunidades.md
+/pipeline_v4/calibration_and_diagnostics/modal_classification/calibration/bayes/clean_dataset.py
+/pipeline_v4/calibration_and_diagnostics/modal_classification/calibration/bayes/generar_datos_entrenamiento.py
+/pipeline_v4/calibration_and_diagnostics/modal_classification/calibration/bayes/merge_chunks.py
+/pipeline_v4/calibration_and_diagnostics/modal_classification/calibration/bayes/optimizar_matrices_optuna.py
+/pipeline_v4/calibration_and_diagnostics/modal_classification/calibration/bayes/playground_calibracion.ipynb
+/pipeline_v4/calibration_and_diagnostics/modal_classification/calibration/bayes/run_parallel_generation.py
+/pipeline_v4/calibration_and_diagnostics/modal_classification/calibration/hybrid/compact_n1_n3_campaign.py
+/pipeline_v4/calibration_and_diagnostics/modal_classification/calibration/hybrid/validar_hibrido_v5.py
+/pipeline_v4/calibration_and_diagnostics/modal_classification/calibration/random_forest/generar_datos_entrenamiento_ml.py
+
 # 8. Local Calibration Experiments Images & Figures
 pipeline_v4/calibration_and_diagnostics/routing_algorithm_calibration/*/*.png
 pipeline_v4/calibration_and_diagnostics/routing_algorithm_calibration/*.png

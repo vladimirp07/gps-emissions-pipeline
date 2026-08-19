@@ -170,43 +170,41 @@ class PriorModeClassifier:
 
     def prune_impossible_hypotheses(self, df_trip, near_subway, near_bus):
         """
-        Poda (filtra) hipótesis imposibles para ahorrar costes de ruteo.
+        Remove physically impossible hypotheses before routing.
         
-        Retorna la lista de modos candidatos simplificados que requieren ruteo:
-        - 'Caminar' (si es viable físicamente)
-        - 'Metro' (si es viable físicamente y hay cercanía al metro)
-        - 'Carro' (representando la red vial común o 'road_motorized')
+        Return the simplified candidate modes that require routing:
+        - 'Caminar' when physically feasible;
+        - 'Metro' when physically feasible and near the Metro network;
+        - 'Carro' as the shared road-motorized hypothesis.
         
-        Nota metodológica: 'Bus' no se rutea de manera independiente para evitar
-        duplicar coste computacional sobre la misma red vial (G_drive). Si la hipótesis
-        vial gana, se discriminará 'Carro' vs 'Bus' en el paso posterior.
+        Bus is not routed independently because it uses the same road graph.
+        The later serving step separates Carro from Bus when the road hypothesis wins.
         """
         max_speed = df_trip['Speed [km/h]'].max()
         total_dist_km = df_trip['dis lineal [m]'].sum() / 1000.0
         
         candidates = []
         
-        # 1. Chequeo de Caminar
+        # 1. Walking feasibility.
         if max_speed <= self.max_walk_speed and total_dist_km <= self.max_walk_dist:
             candidates.append('Caminar')
             
-        # 2. Chequeo de Metro
+        # 2. Metro feasibility.
         if near_subway.any() and total_dist_km > 1.0:
             candidates.append('Metro')
             
-        # 3. Chequeo de Motorizado Vial (Carro / Bus)
-        # Se rutea bajo el candidato genérico 'Carro' (road_motorized)
+        # 3. Shared road-motorized feasibility (Carro / Bus).
         if max_speed > 3.0 or total_dist_km > 0.5:
             candidates.append('Carro')
             
-        # Salvaguarda: al menos un candidato
+        # Always return at least one candidate.
         if not candidates:
             candidates = ['Carro']
             
         return candidates
 
     def predict_candidates(self, df_trip, near_subway, near_bus):
-        """Método obsoleto (deprecated) mantenido por compatibilidad hacia atrás."""
+        """Deprecated compatibility alias."""
         return self.prune_impossible_hypotheses(df_trip, near_subway, near_bus)
 
 
@@ -432,17 +430,15 @@ class BayesianRouteEvaluator:
 
     def _resolve_car_vs_bus(self, df_routed, subway_routes, bus_routes, threshold_bus=0.70):
         """
-        Sub-clasificación posterior para discriminar entre Carro y Bus una vez que se ha
-        determinado que el viaje se realizó por la red vial motorizada (road_motorized).
+        Separate Carro from Bus after the road-motorized hypothesis has won.
         
-        Usa variables contextuales y topológicas de alta fidelidad:
-        1. Cercanía espacial a rutas de bus a lo largo de la trayectoria.
-        2. Patrón de paradas de bus / velocidad promedio de ruteo.
-        3. Matrices de probabilidad bayesianas evaluadas sobre la ruta motorizada.
+        Use high-fidelity contextual and topological variables: proximity to bus
+        routes, stop and speed patterns, and Bayesian probabilities evaluated on
+        the routed road hypothesis.
         """
         df_eval = df_routed.copy()
         
-        # Intentar usar el caché precalculado si está cargado y el ruteo contiene nodos válidos
+        # Reuse the precomputed cache when valid routed nodes are available.
         if self.drive_infra_cache is not None:
             cache = self.drive_infra_cache
             near_subway_list = []
@@ -464,7 +460,7 @@ class BayesianRouteEvaluator:
             
         prob_vector_road = self.evaluate_completed_route_with_matrices(df_eval, 'Carro', subway_routes, bus_routes)
         
-        # Calcular porcentaje de cobertura sobre la red de autobuses
+        # Fraction of the route near the bus network.
         fraction_near_bus = df_eval['near_bus_route'].mean() if not df_eval.empty else 0.0
         
         if prob_vector_road['Bus'] > prob_vector_road['Carro'] and fraction_near_bus >= threshold_bus:
@@ -474,24 +470,20 @@ class BayesianRouteEvaluator:
 
     def select_final_mode(self, hypotheses, subway_routes, bus_routes):
         """
-        Compara y evalúa todas las hipótesis de ruteo completadas y selecciona la óptima.
-        
-        Pasos metodológicos:
-        1. Evalúa la probabilidad a posteriori de cada hipótesis ('Caminar', 'Metro', 'Carro')
-           usando sus respectivas geometrías ruteadas.
-        2. Determina el modo ganador en base a la probabilidad de su propia hipótesis.
-        3. Si la hipótesis vial ganadora es 'Carro' (road_motorized), realiza la sub-clasificación
-           posterior 'Carro vs Bus' para no duplicar el costo del ruteo.
+        Evaluate completed routing hypotheses and select the highest-probability mode.
+
+        Each candidate is scored on its routed geometry. If the road hypothesis
+        wins, a final Carro-versus-Bus step avoids routing the same graph twice.
         """
         best_mode = None
         best_probability = -1.0
         best_df = None
         diagnostic_probs = {}
 
-        # Evaluar candidatos ruteados (Caminar, Metro, Carro/Road_Motorized)
+        # Evaluate routed candidates (Caminar, Metro, shared road hypothesis).
         for mode, df_routed in hypotheses.items():
             prob_vector = self.evaluate_completed_route_with_matrices(df_routed, mode, subway_routes, bus_routes)
-            # Evaluamos la probabilidad del modo bajo su propia hipótesis de ruteo
+            # Score each mode under its own routed hypothesis.
             prob_self = prob_vector[mode]
             diagnostic_probs[mode] = prob_vector.to_dict()
             
@@ -500,7 +492,7 @@ class BayesianRouteEvaluator:
                 best_mode = mode
                 best_df = df_routed
 
-        # Sub-clasificación final para vehículos de carretera (Carro vs Bus)
+        # Final Carro-versus-Bus classification for the road hypothesis.
         if best_mode == 'Carro' and 'Carro' in hypotheses:
             resolved_mode = self._resolve_car_vs_bus(hypotheses['Carro'], subway_routes, bus_routes)
             if resolved_mode == 'Bus':
@@ -511,11 +503,11 @@ class BayesianRouteEvaluator:
         return best_mode, best_df, best_probability, diagnostic_probs
 
     def evaluate_hypothesis(self, df_routed, mode_hypothesis, subway_routes, bus_routes):
-        """Método obsoleto (deprecated) mantenido por compatibilidad hacia atrás."""
+        """Deprecated compatibility alias."""
         return self.evaluate_completed_route_with_matrices(df_routed, mode_hypothesis, subway_routes, bus_routes)
 
     def select_best_hypothesis(self, hypotheses, subway_routes, bus_routes):
-        """Método obsoleto (deprecated) mantenido por compatibilidad hacia atrás."""
+        """Deprecated compatibility alias."""
         return self.select_final_mode(hypotheses, subway_routes, bus_routes)
 
 
@@ -580,8 +572,8 @@ class RandomForestRouteEvaluator:
 
         if not self.model_path.exists():
             raise FileNotFoundError(
-                f"No se encontró el modelo RF de producción en {self.model_path}. "
-                "Inferencia no entrena ni escribe modelos; ejecute entrenar_random_forest.py explícitamente."
+                f"Production RF model not found at {self.model_path}. "
+                "Inference does not train or write models; run the training utility explicitly."
             )
         try:
             with self.model_path.open("rb") as handle:
@@ -650,8 +642,8 @@ class RandomForestRouteEvaluator:
         missing = sorted(set(columns) - set(frame.columns))
         if missing:
             raise ServingContractError(
-                f"La hipótesis {hypothesis!r} no reproduce el contrato de entrenamiento; "
-                f"faltan columnas: {missing}"
+                f"Hypothesis {hypothesis!r} does not satisfy the training contract; "
+                f"missing columns: {missing}"
             )
 
     def extract_features(self, hypotheses, serving_context=None):
@@ -761,7 +753,7 @@ class RandomForestRouteEvaluator:
         extracted = self.extract_features(hypotheses, serving_context=serving_context)
         missing = [name for name in set(self.n1_features + self.n2_features + self.n3_features) if name not in extracted]
         if missing:
-            raise ValueError(f"Faltan variables requeridas para inferencia: {sorted(missing)}")
+            raise ValueError(f"Required inference features are missing: {sorted(missing)}")
         features = pd.DataFrame([extracted], columns=RF_FEATURES)
         x_n1 = features.loc[:, self.n1_features]
         pred_n1 = int(self.clf_n1.predict(x_n1)[0])
@@ -817,7 +809,7 @@ class RandomForestRouteEvaluator:
 
 
 class HybridRouteEvaluator(RandomForestRouteEvaluator):
-    """Clasificador modal jerárquico híbrido oficial: GB / RF / Extra Trees."""
+    """Official hierarchical hybrid modal classifier: GB / RF / Extra Trees."""
 
     def __init__(self, model_path=None):
         self.classifier_name = "hybrid"
@@ -840,8 +832,8 @@ class HybridRouteEvaluator(RandomForestRouteEvaluator):
         import pickle
         if not self.model_path.exists():
             raise FileNotFoundError(
-                f"No se encontró el modelo híbrido oficial en {self.model_path}. "
-                "La inferencia no entrena ni sobrescribe modelos."
+                f"Official hybrid model not found at {self.model_path}. "
+                "Inference does not train or overwrite models."
             )
         try:
             with self.model_path.open("rb") as handle:
@@ -867,11 +859,11 @@ class HybridRouteEvaluator(RandomForestRouteEvaluator):
             self.loaded_from_disk = True
             print("[HybridRouteEvaluator] Hybrid model loaded.", flush=True)
         except Exception as exc:
-            raise RuntimeError(f"No se pudo cargar el modelo híbrido compatible desde {self.model_path}: {exc}") from exc
+            raise RuntimeError(f"Could not load a compatible hybrid model from {self.model_path}: {exc}") from exc
 
 
 class GuardrailedBayesianRouteEvaluator(BayesianRouteEvaluator):
-    """Bayes histórico con el mismo guardrail de calidad de los modelos ML."""
+    """Historical Bayes backend with the same quality guardrail as ML models."""
 
     def __init__(self):
         super().__init__()
@@ -929,7 +921,7 @@ def create_modal_evaluator(classifier=None, enable_bayes_fallback=False):
             )
             return BayesianRouteEvaluator()
         raise RuntimeError(
-            "No fue posible inicializar ML v4 y el fallback Bayes está deshabilitado. "
+            "ML V4 initialization failed and the Bayes fallback is disabled. "
             f"Detalle: {exc}"
         ) from exc
 

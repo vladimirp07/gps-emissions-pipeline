@@ -100,14 +100,18 @@ class TestHybridModalProduction(unittest.TestCase):
             )
 
     def test_grouped_degradations_and_mixed_exclusion(self):
-        with (config.MODAL_ARTIFACTS_DIR / "datos_entrenamiento_ml_expanded.pkl").open("rb") as handle:
+        cache_path = config.MODAL_ARTIFACTS_DIR / "datos_entrenamiento_ml_expanded.pkl"
+        clean_path = GPS / "Datos de MATLAB GPS Limpios.csv"
+        if not cache_path.exists() or not clean_path.exists():
+            self.skipTest("requires local calibration datasets that are not versioned")
+        with cache_path.open("rb") as handle:
             cache = pickle.load(handle)
         scenarios = {}
         for item in cache:
             physical = item["trip_id"].split("-", 1)[0]
             scenarios.setdefault(physical, set()).add(item["degradacion"])
         self.assertEqual(len(scenarios), 114)
-        clean = pd.read_csv(GPS / "Datos de MATLAB GPS Limpios.csv")
+        clean = pd.read_csv(clean_path)
         mixed = set()
         for (caid, trip), part in clean.groupby(["caid", "num_trip"]):
             if part.mode_of_transport.dropna().astype(str).str.strip().str.lower().nunique() > 1:
@@ -131,7 +135,7 @@ class TestHybridModalProduction(unittest.TestCase):
 
     def test_missing_model_fails_clearly(self):
         missing = ROOT / "missing-hybrid-model.pkl"
-        with self.assertRaisesRegex(FileNotFoundError, "No se encontró el modelo híbrido"):
+        with self.assertRaisesRegex(FileNotFoundError, "Official hybrid model not found"):
             HybridRouteEvaluator(missing)
 
     def test_missing_feature_fails_clearly(self):
@@ -140,7 +144,7 @@ class TestHybridModalProduction(unittest.TestCase):
         incomplete = self.hybrid.extract_features(hypotheses, serving_context=self._context())
         incomplete.pop(N1_FEATURES[0])
         with patch.object(self.hybrid, "extract_features", return_value=incomplete):
-            with self.assertRaisesRegex(ValueError, "Faltan variables requeridas"):
+            with self.assertRaisesRegex(ValueError, "Required inference features are missing"):
                 self.hybrid.select_final_mode(hypotheses, serving_context=self._context())
 
 

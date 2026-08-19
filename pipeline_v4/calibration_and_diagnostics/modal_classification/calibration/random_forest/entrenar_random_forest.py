@@ -39,7 +39,7 @@ def parse_trip_key(trip_id_str):
     return caid_trip, label, deg, modo_hip
 
 def main():
-    parser = argparse.ArgumentParser(description="Entrena ML v4 sin sobrescribir artefactos salvo la salida explícita.")
+    parser = argparse.ArgumentParser(description="Train ML V4 without overwriting artifacts except the explicit output.")
     parser.add_argument("--input-cache", default="datos_entrenamiento_ml.pkl")
     parser.add_argument("--output-model", default="random_forest_modal.pkl")
     parser.add_argument("--metrics-json")
@@ -53,15 +53,15 @@ def main():
     clean_csv_path = config.GPS_DIR / "Datos de MATLAB GPS Limpios.csv"
     output_pkl = config.GPS_DIR / Path(args.output_model).name
     
-    print(f"Cargando caché de entrenamiento: {pkl_path}")
+    print(f"Loading training cache: {pkl_path}")
     if not pkl_path.exists():
-        print(f"Error: No existe el archivo {pkl_path}. Ejecuta generar_datos_entrenamiento_ml.py primero.")
+        print(f"Error: training cache not found at {pkl_path}. Provide it with --input-cache.")
         sys.exit(1)
         
     with open(pkl_path, "rb") as f:
         data_cache = pickle.load(f)
         
-    print("Estableciendo mapeo de viajes canónicos...")
+    print("Building the canonical trip mapping...")
     df_clean = pd.read_csv(clean_csv_path)
     canonical_modes = {}
     mixed_trips = []
@@ -85,8 +85,8 @@ def main():
         else:
             canonical_modes[key] = modes[0]
             
-    print(f"Total trayectorias físicas únicas en MATLAB: {len(canonical_modes)}")
-    print(f"Viajes excluidos por etiquetas mixtas ({len(mixed_trips)})")
+    print(f"Unique physical MATLAB trajectories: {len(canonical_modes)}")
+    print(f"Trips excluded because of mixed labels: {len(mixed_trips)}")
     
     MODOS = ["Carro", "Bus", "Metro", "Caminar"]
     MODE_TO_IDX = {m.lower(): i for i, m in enumerate(MODOS)}
@@ -96,7 +96,7 @@ def main():
         caid_trip, label, deg, modo_hip = parse_trip_key(item["trip_id"])
         canonical_label = canonical_modes.get(caid_trip)
         
-        # Excluir viajes mixtos y vacíos
+        # Exclude mixed-label and empty-label trips.
         if not canonical_label or canonical_label in ["mixed_label", "empty_label"]:
             continue
             
@@ -105,7 +105,7 @@ def main():
             trips_dict[key] = {}
         trips_dict[key][modo_hip] = item
         
-    print(f"Agrupados en {len(trips_dict)} instancias de viaje canónicas únicas en caché.")
+    print(f"Grouped into {len(trips_dict)} unique canonical cached trip instances.")
     
     rows = []
     for (caid_trip, label, deg), hyps in trips_dict.items():
@@ -221,26 +221,26 @@ def main():
         expected_scenarios = TRAINING_SCENARIOS if expected_scenarios is None else expected_scenarios
     if expected_trips is not None and physical_trip_count != expected_trips:
         raise RuntimeError(
-            f"Se esperaban {expected_trips} viajes y se obtuvieron {physical_trip_count}."
+            f"Expected {expected_trips} trips but found {physical_trip_count}."
         )
     if expected_scenarios is not None and len(df_features) != expected_scenarios:
-        raise RuntimeError(f"Se esperaban {expected_scenarios} escenarios y se obtuvieron {len(df_features)}.")
+        raise RuntimeError(f"Expected {expected_scenarios} scenarios but found {len(df_features)}.")
     
-    # Contrato único de 52 variables de producción.
+    # Single 52-feature production contract.
     feature_cols_v4 = list(RF_FEATURES)
     
     X_v4 = df_features[feature_cols_v4].fillna(0.0)
     y = df_features["label"].map(MODE_TO_IDX)
     groups = df_features["caid_trip"]
     
-    # Evaluar por 5-fold CV canónico
+    # Evaluate with canonical five-fold cross-validation.
     gkf = GroupKFold(n_splits=5)
     cv_scores = []
     y_true_all = []
     y_pred_all = []
     
     print("\n" + "="*70)
-    print("  EVALUACIÓN CASCADA JERÁRQUICA CANÓNICA OFICIAL (52 VARIABLES)")
+    print("  OFFICIAL CANONICAL HIERARCHICAL CASCADE EVALUATION (52 FEATURES)")
     print("="*70)
     
     for fold, (train_idx, val_idx) in enumerate(gkf.split(df_features, y, groups)):
@@ -306,7 +306,7 @@ def main():
         "confusion_matrix": cm.tolist(),
     }
     
-    # Generar y guardar gráfico de la matriz de confusión
+    # Generate and save the confusion-matrix figure.
     try:
         import matplotlib.pyplot as plt
         cm_norm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
@@ -341,8 +341,8 @@ def main():
                                  horizontalalignment="center",
                                  color="white" if cm[i, j] > thresh else "black")
         axes[0].set_ylabel('Clase Real')
-        axes[0].set_xlabel('Predicción del Modelo')
-        axes[0].set_title('Matriz de Confusión Absoluta')
+        axes[0].set_xlabel('Model prediction')
+        axes[0].set_title('Absolute confusion matrix')
         
         # Plot 2: Normalizada
         if sns_available:
@@ -365,21 +365,21 @@ def main():
                                  horizontalalignment="center",
                                  color="white" if cm_norm[i, j] > thresh else "black")
         axes[1].set_ylabel('Clase Real')
-        axes[1].set_xlabel('Predicción del Modelo')
-        axes[1].set_title('Matriz de Confusión Normalizada (0 a 1)')
+        axes[1].set_xlabel('Model prediction')
+        axes[1].set_title('Normalized confusion matrix (0 to 1)')
         
-        plt.suptitle('Matriz de Confusión - Random Forest ML v4 Oficial (Dataset Canónico)', fontsize=13, y=0.99)
+        plt.suptitle('Confusion matrix - Official Random Forest ML V4 (canonical dataset)', fontsize=13, y=0.99)
         plt.tight_layout()
         
         plot_path = PROJECT_ROOT / args.confusion_plot if args.confusion_plot else PROJECT_ROOT / "matriz_confusion_random_forest.png"
         plt.savefig(plot_path, dpi=300)
         plt.close()
-        print(f"Gráfico de matriz de confusión guardado exitosamente en: {plot_path}")
+        print(f"Confusion-matrix figure saved to: {plot_path}")
     except Exception as e:
-        print(f"Advertencia al generar gráfico de matriz de confusión: {e}")
+        print(f"Warning while generating the confusion-matrix figure: {e}")
         
-    # Entrenamiento de los modelos finales para producción
-    print("\nEntrenando modelos finales oficiales en todos los datos canónicos...")
+    # Train the final production models.
+    print("\nTraining the official final models on all canonical data...")
     
     clf_n1_final = RandomForestClassifier(**RF_HYPERPARAMETERS["n1"])
     clf_n1_final.fit(X_v4, (y != MODE_TO_IDX["caminar"]).astype(int))
@@ -392,7 +392,7 @@ def main():
     clf_n3_final = RandomForestClassifier(**RF_HYPERPARAMETERS["n3"])
     clf_n3_final.fit(X_v4[road_mask_final], (y[road_mask_final] == MODE_TO_IDX["bus"]).astype(int))
     
-    print(f"\nGuardando modelos cascada unificados en: {output_pkl}")
+    print(f"\nSaving the unified cascade models to: {output_pkl}")
     with open(output_pkl, "wb") as f:
         pickle.dump({
             "clf_n1": clf_n1_final,
@@ -408,9 +408,9 @@ def main():
         metrics_path = config.GPS_DIR / Path(args.metrics_json).name
         with open(metrics_path, "w", encoding="utf-8") as f:
             json.dump(metrics, f, ensure_ascii=False, indent=2)
-        print(f"Métricas guardadas en: {metrics_path}")
+        print(f"Metrics saved to: {metrics_path}")
         
-    print("Entrenamiento y serialización finalizados exitosamente!")
+    print("Training and serialization completed successfully.")
 
 if __name__ == "__main__":
     main()

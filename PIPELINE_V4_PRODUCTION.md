@@ -1,86 +1,95 @@
-# pipeline_v4_production
+# pipeline_v4 production release
 
-**pipeline_v4_production — READY FOR CONTROLLED PRODUCTION**
+**Status: READY FOR CONTROLLED PRODUCTION**
 
-El código de producción reside en `pipeline_v4/` y la versión lógica se fija en `config.PIPELINE_RELEASE`.
+The production implementation lives under `pipeline_v4/`. Its logical release
+identifier is defined by `config.PIPELINE_RELEASE`.
 
-La baseline oficial de ruteo es V2 optimizado. Conserva exactamente las
-decisiones y salidas de V2 previamente congeladas, con `n_jobs=2`, lookahead
-acotado a 10 pings, separación por componentes, preservación de endpoints V2
-y rollback V1.
+The official routing baseline is optimized V2. It preserves the validated V2
+decisions and outputs with `n_jobs=2`, a bounded lookahead of 10 skipped pings,
+component splitting, V2 endpoint preservation, and V1 rollback support.
 
-## Flujo
+## Workflow
 
-`GPS → segmentación → map-matching multi-hipótesis → clasificador modal jerárquico híbrido → lookup MOVES → emisiones por subsegmento`.
+`GPS -> segmentation -> map matching -> hierarchical hybrid modal classifier -> MOVES lookup -> subsegment emissions`
 
-## Contratos
+## Module contracts
 
-- Ruteo entrega `physical_trip_id`, timestamps, hipótesis de red, nodos/aristas, `osmid`, metros, km/h, duración y estados explícitos de ruteo/snapping.
-- Clasificación recibe hipótesis ruteadas y entrega clase, probabilidades, backend, versión, calidad y motivo de rechazo mediante `evaluate_with_contract`.
-- Emisiones recibe modo, `osmid`, metros, km/h, vía y hora. Entrega tasas `g/km`, distancia calculada en km, totales en g y estado del lookup.
+- Routing emits the physical trip identifier, timestamps, network hypotheses,
+  nodes and edges, `osmid`, distance, speed, duration, and explicit routing and
+  snapping states.
+- Classification consumes routed hypotheses and emits the class,
+  probabilities, backend, version, quality status, and rejection reason through
+  `evaluate_with_contract`.
+- Emissions consumes mode, `osmid`, distance, speed, road type, and time. It
+  emits `g/km` rates, calculated distance in km, totals in grams, and lookup
+  status.
 
-Los validadores centrales están en `pipeline_v4/src/pipeline_contracts.py`.
+The shared validators are defined in
+`pipeline_v4/src/pipeline_contracts.py`.
 
-## Baseline de ruteo V2
+## Optimized V2 routing baseline
 
-La implementación productiva elimina trabajo redundante mediante un índice
-comprimido de aristas incidentes, snapping conjunto de endpoints, caché
-determinista y acotada de shortest paths, ensamblaje vectorizado de candidatos,
-caché de proximidad a infraestructura por ejecución y caché lazy/thread-safe de
-atributos de aristas. La comparación congelada del 18 de agosto de 2026 confirmó
-igualdad exacta de candidatos, rutas, WKT, distancias, componentes, estados,
-modos, features, emisiones, ledger, summary y detailed.
+The production implementation avoids redundant work through a compressed
+incident-edge index, batched endpoint snapping, a deterministic bounded
+shortest-path cache, vectorized candidate assembly, persistent spatial indexes,
+a run-scoped infrastructure-proximity cache, and a lazy thread-safe
+edge-attribute cache.
 
-El generador productivo usa `sjoin_nearest`: devuelve la arista más cercana y
-sus empates exactos dentro del radio configurado, limitada por `max_cands`; no
-representa una consulta K-nearest. La evaluación diagnóstica de K=3, selección
-adaptativa, horizontes cortos, beam search y secuencias globales no encontró una
-alternativa con mejora suficiente y sin regresiones. Esas implementaciones se
-conservan exclusivamente en `calibration_and_diagnostics`; producción mantiene
-nearest-only/ties.
+The frozen production comparison dated August 18, 2026 confirmed exact
+equivalence for candidates, routes, WKT, distances, components, statuses,
+modes, features, emissions, ledger, summary, and detailed outputs.
 
-## Clasificador modal
+Candidate generation uses `sjoin_nearest`: it returns the nearest edge and any
+exact-distance ties within the configured radius, capped by `max_cands`. It is
+not a K-nearest query. Production therefore remains nearest-only/ties.
 
-- Predeterminado: `hybrid` — N1 Gradient Boosting (16), N2 Random Forest (52), N3 Extra Trees (25), umbral Bus 0.50.
+## Modal classifier
+
+- Default: `hybrid` -- N1 Gradient Boosting (16 features), N2 Random Forest
+  (52 features), and N3 Extra Trees (25 features) with a 0.50 Bus threshold.
 - Rollback: `random_forest`.
-- Alternativa: `bayes`.
+- Alternative: `bayes`.
 
-Cambiar en `config.py` o con `MODAL_CLASSIFIER=hybrid|random_forest|bayes`.
+Select the backend in `pipeline_v4/src/config.py` or with
+`MODAL_CLASSIFIER=hybrid|random_forest|bayes`.
 
-## Guardrail
+## Quality guardrail
 
-Requiere al menos 15 pings efectivos y 30% conservado. En otro caso devuelve `Calidad insuficiente` con causa `quality_guardrail`.
+Classification requires at least 15 effective pings and 30 percent of the
+original trajectory to remain after cleaning. Trips that do not meet this
+contract are rejected with a `quality_guardrail` reason.
 
-## Ejecución
+## Environment and execution
 
-El runtime no depende del playground. El orquestador usa únicamente `create_modal_evaluator(config.MODAL_CLASSIFIER)`. Para validación rápida:
+Production requires Python 3.12 and scikit-learn 1.5.2. Exact dependency
+versions are pinned in `requirements-production.txt`, and the canonical
+workflow validates the environment before loading persisted artifacts.
 
-El entorno productivo requiere Python 3.12 y scikit-learn 1.5.2. Las versiones
-se fijan en `requirements-production.txt` y el workflow las valida en runtime
-antes de cargar el artifact. Los timestamps de entrada deben representar UTC;
-los timestamps naive se interpretan explícitamente como UTC. La cobertura de
-adquisición se declara como intervalo semiabierto para eliminar sólo días
-locales de borde realmente truncados.
+Input timestamps must represent UTC. Naive timestamps are interpreted as UTC.
+Acquisition coverage is configured as a half-open interval so that only local
+edge days proven to be truncated are excluded.
+
+Run the reusable validation suite with:
 
 ```powershell
-py -3.12 -m pytest tests -q
-jupyter nbconvert --to notebook --execute pipeline_v4/calibration_and_diagnostics/modal_classification/notebooks/playground_modal_classifier.ipynb
+py -3.12 -m pytest -q
 ```
 
-## Limitaciones
+Use `notebooks/GPS_preprocessing_and_pipeline_v4.ipynb` as the production entry
+point. Review its input paths and acquisition coverage, then enable the explicit
+execution switch. Each execution writes only to its own
+`Outputs/runs/<run_id>/` directory.
 
-- El router legacy no conserva distancia exacta de snapping por subsegmento y lo marca `not_recorded_by_legacy_router`.
-- `max_cands` limita resultados nearest/ties; no garantiza K aristas cercanas.
-- Candidatos adicionales pueden mejorar rutas aisladas, pero la selección local
-  puede deteriorar la consistencia posterior. Cualquier evaluación futura de
-  secuencias deberá conservar exactamente el estado productivo de rollback y
-  nodos penalizados.
-- Los PKL deben cargarse con scikit-learn 1.5.2.
+## Known limitations
 
-## Estado del módulo
+- The V1 rollback router does not persist numeric snap distance per subsegment.
+- `max_cands` caps nearest/tied results; it does not guarantee K nearby edges.
+- Persisted classifier artifacts must be loaded with scikit-learn 1.5.2.
 
-- Estado: READY FOR CONTROLLED PRODUCTION
-- Bloquea producción: No
-- Acción recomendada: mantener V2 optimizado con nearest-only/ties y monitoreo
-  normal de calidad, clasificación y emisiones.
+## Release status
 
+- Status: READY FOR CONTROLLED PRODUCTION
+- Production blocker: none in the validated release
+- Required operating baseline: optimized V2, nearest-only/ties, `N_JOBS = 2`,
+  and normal monitoring of route quality, classification, and emissions

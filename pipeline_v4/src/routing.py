@@ -297,10 +297,10 @@ def complete_route(id, registros_person,
             continue
 
         # =============================================================
-        # INYECTA EL BLOQUE DEL METRO AQUÍ MISMO
+        # Metro topology bypass.
         # =============================================================
 
-        # BYPASS TOPOLÓGICO PARA EL METRO (Snap to Track Geometry)
+        # Snap Metro endpoints to track geometry.
         if str(modo_actual).title() == 'Metro':
             lat1, lon1 = lats_arr[origen_idx], lons_arr[origen_idx]
             lat2, lon2 = lats_arr[destino_idx], lons_arr[destino_idx]
@@ -308,12 +308,12 @@ def complete_route(id, registros_person,
             time_real = (timestamps_list[destino_idx] - timestamps_list[origen_idx]).total_seconds()
             
             try:
-                # 1. Ejecutamos tu función mágica de ajuste a las vías
+                # 1. Snap the observed endpoints to the Metro track.
                 geom_wkt, distancia_m = _obtener_tramo_metro(lon1, lat1, lon2, lat2, geometry_metro)
                 vel_metro = (distancia_m / 1000.0) / (time_real / 3600.0) if time_real > 0 else 0
                 flag = 'Metro_Topologico (Track Snapped)'
             except Exception:
-                # 2. Airbag de seguridad: Si falla, trazamos línea recta
+                # 2. Fall back to a straight line if track snapping fails.
                 dist_km = haversine_vectorized(lat1, lon1, lat2, lon2)
                 distancia_m = dist_km * 1000.0
                 vel_metro = dist_km / (time_real / 3600.0) if time_real > 0 else 0
@@ -506,7 +506,7 @@ def complete_route(id, registros_person,
                     
                     if vel_local > techo_final:
                         velocidad_excedida_subsegmento = True
-                        break # ¡Rompe la física! Abortamos todo este ruteo
+                        break  # Reject the route when a subsegment violates the speed ceiling.
                     
                     
         if not ruta_exitosa or velocidad_excedida_subsegmento:
@@ -712,16 +712,11 @@ def complete_route_v1_optimized(id, registros_person,
                 *,
                 max_lookahead_skipped_pings=None):
     """
-    Versión Alternativa V1 - Optimizada.
+    Optimized V1-compatible routing implementation.
     
-    Cambios implementados:
-    1. Consultas en Lote (Bulk Query) a iGraph: Agrupa todos los destinos para cada origen único
-       y realiza una sola consulta multiobjetivo (single-source multi-target) por iteración.
-    2. Edge Attribute Caching: Pre-calcula y almacena en un diccionario plano {(u, v): (length, travel_time)}
-       los atributos de aristas del grafo de NetworkX, logrando búsquedas O(1) veloces.
-    3. Prevención de Recálculos Redundantes: Estructura la información de peso y longitud del camino
-       en el momento de su cálculo inicial y la reutiliza en las fases de validación física e
-       inserción final sin recorrer el grafo de nuevo.
+    Uses batched single-source/multi-target iGraph queries, a flat edge-attribute
+    cache, and reuse of path weight and length calculations during physical
+    validation and final row assembly.
     """ 
     from collections import OrderedDict, defaultdict
     rpc_list = []

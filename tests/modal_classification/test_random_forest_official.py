@@ -47,8 +47,12 @@ class TestRandomForestOfficial(unittest.TestCase):
         cls.evaluator = RandomForestRouteEvaluator()
         with (config.MODAL_ARTIFACTS_DIR / "random_forest_modal.pkl").open("rb") as handle:
             cls.model = pickle.load(handle)
-        with (config.MODAL_ARTIFACTS_DIR / "datos_entrenamiento_ml.pkl").open("rb") as handle:
-            cls.cache = pickle.load(handle)
+        cache_path = config.MODAL_ARTIFACTS_DIR / "datos_entrenamiento_ml.pkl"
+        if cache_path.exists():
+            with cache_path.open("rb") as handle:
+                cls.cache = pickle.load(handle)
+        else:
+            cls.cache = None
 
     def test_feature_contract_matches_training_inference_notebook_and_pkl(self):
         self.assertEqual(len(RF_FEATURES), 52)
@@ -64,7 +68,7 @@ class TestRandomForestOfficial(unittest.TestCase):
         self.assertIn("N2_FEATURES", notebook)
         self.assertIn("N1_FEATURES", notebook)
         self.assertIn("N3_FEATURES", notebook)
-        self.assertIn("El flujo principal actual es el clasificador modal jerárquico híbrido", notebook)
+        self.assertIn("The hierarchical hybrid classifier is the production default", notebook)
 
     def test_model_is_loadable_and_has_compatible_estimators(self):
         self.assertTrue(self.evaluator.loaded_from_disk)
@@ -80,7 +84,10 @@ class TestRandomForestOfficial(unittest.TestCase):
             RandomForestRouteEvaluator(model_path=missing)
 
     def test_canonical_cache_has_66_trips_and_260_scenarios(self):
-        clean = pd.read_csv(config.GPS_DIR / "Datos de MATLAB GPS Limpios.csv")
+        clean_path = config.GPS_DIR / "Datos de MATLAB GPS Limpios.csv"
+        if self.cache is None or not clean_path.exists():
+            self.skipTest("requires local calibration datasets that are not versioned")
+        clean = pd.read_csv(clean_path)
         canonical = {}
         for (caid, num_trip), subset in clean.groupby(["caid", "num_trip"]):
             modes = {str(mode).strip().lower() for mode in subset["mode_of_transport"].dropna() if str(mode).strip()}
@@ -98,7 +105,10 @@ class TestRandomForestOfficial(unittest.TestCase):
         self.assertTrue(all(canonical[physical] is not None for physical, _ in scenarios))
 
     def test_groupkfold_never_splits_degradations_of_same_trip(self):
-        clean = pd.read_csv(config.GPS_DIR / "Datos de MATLAB GPS Limpios.csv")
+        clean_path = config.GPS_DIR / "Datos de MATLAB GPS Limpios.csv"
+        if self.cache is None or not clean_path.exists():
+            self.skipTest("requires local calibration datasets that are not versioned")
+        clean = pd.read_csv(clean_path)
         canonical = {}
         for (caid, num_trip), subset in clean.groupby(["caid", "num_trip"]):
             modes = {str(mode).strip().lower() for mode in subset["mode_of_transport"].dropna() if str(mode).strip()}
