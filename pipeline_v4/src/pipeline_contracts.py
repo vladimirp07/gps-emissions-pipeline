@@ -1,4 +1,4 @@
-"""Contratos mínimos y validadores entre los módulos del pipeline de producción."""
+"""Minimal contracts and validators between production pipeline modules."""
 from __future__ import annotations
 
 import numpy as np

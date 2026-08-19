@@ -1,4 +1,4 @@
-"""Contrato único del clasificador modal Random Forest ML v4 de producción."""
+"""Single feature contract for the production Random Forest ML V4 classifier."""
 
 MODEL_VERSION = "ML_v4_52"
 TRAINING_TRIPS = 66
@@ -48,7 +48,7 @@ RF_HYPERPARAMETERS = {
 assert len(RF_FEATURES) == 52
 assert not set(RF_FEATURES).intersection(EXPERIMENTAL_BUS_FEATURES)
 
-# Contrato oficial del clasificador modal jerárquico híbrido.
+# Official hierarchical hybrid modal-classifier contract.
 HYBRID_MODEL_VERSION = "hybrid_v1"
 HYBRID_TRAINING_TRIPS = 114
 HYBRID_TRAINING_SCENARIOS = 445

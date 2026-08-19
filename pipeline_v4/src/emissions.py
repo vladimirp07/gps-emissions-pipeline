@@ -67,7 +67,7 @@ def calculate_emissions(df_rutas_in, file_moves_path):
     bins = [0, 2.5, 7.5, 12.5, 17.5, 22.5, 27.5, 32.5, 37.5, 42.5, 47.5, 52.5, 57.5, 62.5, 67.5, 72.5, float('inf')]
     df_rutas['SpeedBin'] = pd.cut(df_rutas['avg_speed_mph'], bins=bins, labels=False, right=False).fillna(0).astype(int) + 1
     
-    # 2. CRUCE CON MOVES EMISSION RATES
+    # 2. Join with MOVES emission rates.
     merge_cols = ['Day', 'Hour', 'Road', 'Source', 'SpeedBin']
     cols_needed = merge_cols + POLLUTANTS
     df_emisiones_raw = df_emisiones_raw[cols_needed].astype({

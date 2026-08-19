@@ -95,6 +95,8 @@ visual_content/
 /local_reports/
 /docs_private/
 /local_notes/
+/PRODUCTION_GITHUB_PUSH_REVIEW.md
+/PUBLIC_REPOSITORY_CLEANUP_REVIEW.md
 /Outputs/production_smoke_tests/
 /outputs/production_smoke_tests/
 **/*confusion_matrix*.png
