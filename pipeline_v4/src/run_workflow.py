@@ -143,6 +143,7 @@ def run_production(
     resources=None,
     output_mode="summary",
     show_progress=True,
+    user_day_batch_size=None,
     now=None,
 ):
     """Run supplied sample -> preprocessing/home -> pipeline_v4 in a unique directory."""
@@ -212,6 +213,9 @@ def run_production(
             "n_jobs": int(n_jobs),
             "limit_users": limit_users,
             "limit_days_per_user": limit_days_per_user,
+            "user_day_batch_size": int(
+                config.USER_DAY_BATCH_SIZE if user_day_batch_size is None else user_day_batch_size
+            ),
         },
         "moves_rate_unit_status": "pending_external_confirmation",
         "hashes": {
@@ -247,6 +251,7 @@ def run_production(
             n_jobs=n_jobs, limit_users=limit_users,
             limit_days_per_user=limit_days_per_user, resources=resources,
             output_mode=output_mode, show_progress=show_progress,
+            user_day_batch_size=user_day_batch_size,
         )
         failures = int((pipeline.trip_ledger.processing_status != "success").sum())
         metadata = preprocessing.user_metadata

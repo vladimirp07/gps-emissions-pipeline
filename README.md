@@ -23,6 +23,11 @@ exact-distance ties, V2 endpoint preservation, component splitting, a bounded
 lookahead of 10 skipped pings, and `N_JOBS = 2`. Route outcomes are `complete`,
 `partial`, or `failed`; failed routes are not eligible for emissions.
 
+Routing processes user-day tasks in bounded windows of 32 by default
+(`USER_DAY_BATCH_SIZE` can be overridden for memory-constrained deployments).
+This changes task lifetime and progress reporting only; routing inputs and
+scientific outputs remain unchanged.
+
 ## Repository structure
 
 ```text

@@ -380,11 +380,11 @@ def _process_indexed_user_day(task_index, user_id, day, loaded_resources):
 
 
 def _run_user_day_tasks(tasks, loaded_resources, n_jobs: int, show_progress: bool):
-    """Run user-day tasks with completion-based progress and deterministic output order."""
+    """Run one bounded task window with deterministic output order."""
     parallel = Parallel(n_jobs=n_jobs, backend="threading", return_as="generator_unordered")
     task_results = parallel(
-        delayed(_process_indexed_user_day)(task_index, user_id, day, loaded_resources)
-        for task_index, (user_id, day) in enumerate(tasks)
+        delayed(_process_indexed_user_day)(task_index, user_id, day_frame, loaded_resources)
+        for task_index, user_id, day_frame in tasks
     )
     completed = []
     progress = (
@@ -415,10 +415,11 @@ def run_pipeline_v4(
     output_mode: str = "summary",
     reuse_modal_evaluator: bool = True,
     show_progress: bool = True,
+    user_day_batch_size: int | None = None,
 ) -> PipelineV4Result:
     """Produce routes, individual emissions, and the canonical trip ledger."""
     output_mode = validate_output_mode(output_mode)
-    print("[Pipeline] Reading preprocessed GPS input...", flush=True)
+    print("[Pipeline] Loading preprocessed GPS...", flush=True)
     gps = _read_frame(preprocessed_gps)
     required = {"caid", "local_timestamp", "latitude", "longitude"}
     missing = sorted(required - set(gps.columns))
@@ -438,31 +439,63 @@ def run_pipeline_v4(
             eligible = metadata.processing_status.eq("ready_for_pipeline")
         ready = metadata.loc[eligible, "user_id"]
         gps = gps[gps.caid.isin(ready)].copy()
+    print(
+        f"[Pipeline] Loaded {len(gps):,} rows for {gps.caid.nunique():,} ready user(s).",
+        flush=True,
+    )
     users = gps.caid.drop_duplicates().tolist()
     if limit_users is not None:
         users = users[:limit_users]
-    tasks = []
+    # Keep only deterministic task specifications (user/day and source row
+    # positions). Materialize task DataFrames only for the active window.
+    group_indices = gps.groupby(["caid", "date"], sort=False, observed=True).indices
+    task_specs = []
     for user_id in users:
-        user = gps[gps.caid.eq(user_id)]
-        days = sorted(user.date.unique())
+        days = sorted(gps.loc[gps.caid.eq(user_id), "date"].unique())
         if limit_days_per_user is not None:
             days = days[:limit_days_per_user]
-        tasks.extend((user_id, user[user.date.eq(day)].copy()) for day in days)
+        task_specs.extend((user_id, day) for day in days)
     print(
-        f"[Pipeline] Prepared {len(tasks)} user-day task(s) for {len(users)} user(s).",
+        f"[Pipeline] Identified {len(task_specs)} user-day task(s) for {len(users)} user(s).",
         flush=True,
     )
-    print("[Pipeline] Loading routing networks and modal inference resources...", flush=True)
+    print("[Pipeline] Loading routing resources...", flush=True)
     loaded_resources = dict(resources or load_pipeline_resources())
+    print("[Pipeline] Routing resources loaded.", flush=True)
     if reuse_modal_evaluator and "modal_evaluator" not in loaded_resources:
         # The serving evaluator is read-only during inference. Loading it once
         # per run removes repeated model deserialization without changing calls.
         loaded_resources["modal_evaluator"] = create_modal_evaluator(config.MODAL_CLASSIFIER)
-    print(f"[Pipeline] Processing routing and modal inference with {n_jobs} worker(s)...", flush=True)
-    results = _run_user_day_tasks(tasks, loaded_resources, n_jobs, show_progress)
+    print("[Pipeline] Classifier resources loaded.", flush=True)
+    batch_size = int(config.USER_DAY_BATCH_SIZE if user_day_batch_size is None else user_day_batch_size)
+    if batch_size <= 0:
+        raise ValueError("user_day_batch_size must be a positive integer")
+    batch_count = (len(task_specs) + batch_size - 1) // batch_size
+    total_user_days = len(task_specs)
+    print(
+        f"[Pipeline] Processing {len(task_specs)} user-day task(s) in {batch_count} batch(es) "
+        f"of at most {batch_size} with {n_jobs} worker(s)...",
+        flush=True,
+    )
+    route_frames, ledger_frames = [], []
+    for batch_number, start in enumerate(range(0, len(task_specs), batch_size), start=1):
+        window_specs = task_specs[start:start + batch_size]
+        window_tasks = [
+            (start + offset, user_id, gps.iloc[group_indices[(user_id, day)]].copy())
+            for offset, (user_id, day) in enumerate(window_specs)
+        ]
+        print(
+            f"[Pipeline] Processing user-day batch {batch_number}/{batch_count}...",
+            flush=True,
+        )
+        window_results = _run_user_day_tasks(
+            window_tasks, loaded_resources, n_jobs, show_progress
+        )
+        route_frames.extend(result.routes for result in window_results if not result.routes.empty)
+        ledger_frames.extend(result.trip_ledger for result in window_results if not result.trip_ledger.empty)
+        del window_results, window_tasks, window_specs
+    del task_specs, group_indices
     print("[Pipeline] Routing and modal inference complete.", flush=True)
-    route_frames = [result.routes for result in results if not result.routes.empty]
-    ledger_frames = [result.trip_ledger for result in results if not result.trip_ledger.empty]
     routes = pd.concat(route_frames, ignore_index=True) if route_frames else pd.DataFrame()
     ledger = _ensure_ledger_schema(
         pd.concat(ledger_frames, ignore_index=True) if ledger_frames else _empty_ledger()
@@ -546,10 +579,14 @@ def run_pipeline_v4(
     manifest = {
         "stage": "pipeline_v4", "pipeline_release": config.PIPELINE_RELEASE,
         "created_utc": datetime.now(timezone.utc).isoformat(), "classifier": config.MODAL_CLASSIFIER,
-        "users_received": int(gps.caid.nunique()), "user_days": len(tasks),
+        "users_received": int(gps.caid.nunique()), "user_days": total_user_days,
         "trips": int(len(ledger)), "successful_trips": int(ledger.processing_status.eq("success").sum()),
         "route_rows": len(routes), "emission_rows": len(emissions),
-        "limits": {"users": limit_users, "days_per_user": limit_days_per_user},
+        "limits": {
+            "users": limit_users,
+            "days_per_user": limit_days_per_user,
+            "user_day_batch_size": batch_size,
+        },
         "output_mode": output_mode,
         **output_artifacts,
         "moves_rate_unit_status": "pending_external_confirmation",

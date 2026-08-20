@@ -51,6 +51,7 @@ def test_two_runs_never_overwrite_and_manifest_is_complete(monkeypatch, tmp_path
     }
     assert manifest["execution"] == {
         "n_jobs": 2, "limit_users": None, "limit_days_per_user": None,
+        "user_day_batch_size": 32,
     }
     assert manifest["output_mode"] == "summary"
     assert manifest["run_label"] == "input"

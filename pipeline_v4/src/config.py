@@ -51,6 +51,9 @@ EMISSION_TOTAL_UNIT = "g"
 MODAL_CLASSIFIER = os.getenv("MODAL_CLASSIFIER", "hybrid").strip().lower()
 ROUTER_VERSION = os.getenv("ROUTER_VERSION", "v2").strip().lower()
 MAX_LOOKAHEAD_SKIPPED_PINGS = int(os.getenv("MAX_LOOKAHEAD_SKIPPED_PINGS", "10"))
+# Number of user-day task frames retained by one routing window. This bounds
+# task/result lifetime without changing task contents or routing behavior.
+USER_DAY_BATCH_SIZE = int(os.getenv("USER_DAY_BATCH_SIZE", "32"))
 ENABLE_BAYES_FALLBACK = False
 
 

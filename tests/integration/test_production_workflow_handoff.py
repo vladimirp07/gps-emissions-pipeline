@@ -3,6 +3,50 @@ import pandas as pd
 from pipeline_v4.src import production_workflow
 
 
+def test_bounded_batches_preserve_order_and_n_jobs_outputs(monkeypatch, tmp_path):
+    gps = pd.DataFrame({
+        "caid": [101, 101, 202, 202, 303, 303],
+        "local_timestamp": pd.to_datetime([
+            "2026-01-01 08:00", "2026-01-02 08:00",
+            "2026-01-01 08:00", "2026-01-02 08:00",
+            "2026-01-01 08:00", "2026-01-02 08:00",
+        ]),
+        "latitude": [25.68] * 6, "longitude": [-100.31] * 6,
+    })
+    metadata = pd.DataFrame({
+        "user_id": [101, 202, 303], "routing_eligible": [True] * 3,
+    })
+
+    def fake_process(user_id, day_frame, resources):
+        day = day_frame.local_timestamp.iloc[0].strftime("%Y-%m-%d")
+        physical_trip_id = f"{user_id}_{day}_1"
+        ledger = pd.DataFrame([{
+            "user_id": user_id, "trip_id": 1, "physical_trip_id": physical_trip_id,
+            "processing_status": "quality_rejected", "failure_reason": "fixture",
+            "raw_ping_count": 1, "effective_ping_count": 1,
+            "pct_pings_conserved": 100.0, "classification_success": False,
+            "route_success": False, "emissions_success": False,
+        }])
+        return production_workflow.DayProcessingResult(pd.DataFrame(), ledger)
+
+    monkeypatch.setattr(production_workflow, "process_user_day", fake_process)
+    outputs = []
+    for jobs, output in ((1, tmp_path / "jobs1"), (2, tmp_path / "jobs2")):
+        result = production_workflow.run_pipeline_v4(
+            gps, output, metadata, n_jobs=jobs, resources={"fixture": True},
+            output_mode="summary", user_day_batch_size=2,
+        )
+        outputs.append(result.trip_ledger.copy())
+    expected = [
+        "101_2026-01-01_1", "101_2026-01-02_1",
+        "202_2026-01-01_1", "202_2026-01-02_1",
+        "303_2026-01-01_1", "303_2026-01-02_1",
+    ]
+    assert outputs[0].physical_trip_id.tolist() == expected
+    assert outputs[1].physical_trip_id.tolist() == expected
+    pd.testing.assert_frame_equal(outputs[0], outputs[1], check_dtype=False)
+
+
 def test_pipeline_wrapper_uses_routing_eligibility_not_home_quality(monkeypatch, tmp_path):
     gps = pd.DataFrame({
         "caid": [101, 202], "user_id": [101, 202],
