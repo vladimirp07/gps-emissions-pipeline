@@ -365,6 +365,65 @@ def compute_modal_metrics(valid: pd.DataFrame) -> tuple[dict[str, Any], pd.DataF
     return metrics, table
 
 
+def compute_modal_funnel_metrics(trips: pd.DataFrame) -> tuple[dict[str, Any], pd.DataFrame, pd.DataFrame]:
+    """Calculate the modal funnel and failure breakdown across all physical trips."""
+    total = len(trips)
+    pre_status = trips.get("pre_routing_quality_status", pd.Series(dtype=object))
+    quality_passed = int(pre_status.eq("passed").sum())
+    quality_rejected = int(pre_status.eq("rejected").sum())
+
+    def contains_mode(series: pd.Series, mode_name: str) -> int:
+        return int(series.fillna("").astype(str).str.split(";").apply(lambda items: mode_name in items).sum())
+
+    att_series = trips.get("hypotheses_attempted", pd.Series(dtype=object))
+    succ_series = trips.get("hypotheses_successful", pd.Series(dtype=object))
+
+    walk_att = contains_mode(att_series, "Caminar")
+    walk_succ = contains_mode(succ_series, "Caminar")
+    metro_att = contains_mode(att_series, "Metro")
+    metro_succ = contains_mode(succ_series, "Metro")
+    car_att = contains_mode(att_series, "Carro")
+    car_succ = contains_mode(succ_series, "Carro")
+
+    final_modes_raw = trips.get("final_mode", pd.Series(dtype=object)).value_counts(dropna=False).to_dict()
+    final_modes = {str(k): int(v) for k, v in final_modes_raw.items() if pd.notna(k)}
+
+    funnel_rows = [
+        {"funnel_stage": "1. Physical trips detected", "trip_count": total, "share_percent": 100.0},
+        {"funnel_stage": "2. Pre-routing quality passed", "trip_count": quality_passed, "share_percent": float(100.0 * quality_passed / total) if total else 0.0},
+        {"funnel_stage": "2b. Pre-routing quality rejected", "trip_count": quality_rejected, "share_percent": float(100.0 * quality_rejected / total) if total else 0.0},
+        {"funnel_stage": "3a. Walking hypothesis attempted", "trip_count": walk_att, "share_percent": float(100.0 * walk_att / total) if total else 0.0},
+        {"funnel_stage": "3b. Walking hypothesis routed", "trip_count": walk_succ, "share_percent": float(100.0 * walk_succ / total) if total else 0.0},
+        {"funnel_stage": "4a. Metro hypothesis attempted", "trip_count": metro_att, "share_percent": float(100.0 * metro_att / total) if total else 0.0},
+        {"funnel_stage": "4b. Metro hypothesis routed", "trip_count": metro_succ, "share_percent": float(100.0 * metro_succ / total) if total else 0.0},
+        {"funnel_stage": "5a. Road hypothesis attempted", "trip_count": car_att, "share_percent": float(100.0 * car_att / total) if total else 0.0},
+        {"funnel_stage": "5b. Road hypothesis routed", "trip_count": car_succ, "share_percent": float(100.0 * car_succ / total) if total else 0.0},
+        {"funnel_stage": "6a. Final Mode: Walking", "trip_count": int(final_modes.get("Caminar", 0)), "share_percent": float(100.0 * final_modes.get("Caminar", 0) / total) if total else 0.0},
+        {"funnel_stage": "6b. Final Mode: Metro", "trip_count": int(final_modes.get("Metro", 0)), "share_percent": float(100.0 * final_modes.get("Metro", 0) / total) if total else 0.0},
+        {"funnel_stage": "6c. Final Mode: Bus", "trip_count": int(final_modes.get("Bus", 0)), "share_percent": float(100.0 * final_modes.get("Bus", 0) / total) if total else 0.0},
+        {"funnel_stage": "6d. Final Mode: Car", "trip_count": int(final_modes.get("Carro", 0)), "share_percent": float(100.0 * final_modes.get("Carro", 0) / total) if total else 0.0},
+    ]
+    funnel_table = pd.DataFrame(funnel_rows)
+
+    reasons = trips.get("failure_reason", pd.Series(dtype=object)).dropna().value_counts().reset_index()
+    if not reasons.empty:
+        reasons.columns = ["failure_reason", "trip_count"]
+        reasons["share_percent"] = (100.0 * reasons["trip_count"] / total).round(2)
+    else:
+        reasons = pd.DataFrame(columns=["failure_reason", "trip_count", "share_percent"])
+
+    funnel_metrics = {
+        "physical_trips": total,
+        "pre_routing_quality_passed": quality_passed,
+        "pre_routing_quality_rejected": quality_rejected,
+        "hypotheses_attempted": {"Walking": walk_att, "Metro": metro_att, "Road": car_att},
+        "hypotheses_successful": {"Walking": walk_succ, "Metro": metro_succ, "Road": car_succ},
+        "final_modes": final_modes,
+        "failure_reasons": reasons.set_index("failure_reason")["trip_count"].to_dict() if not reasons.empty else {},
+    }
+    return funnel_metrics, funnel_table, reasons
+
+
 def _extract_trip_date(identifier: Any) -> str | None:
     match = _TRIP_DATE_RE.search(str(identifier))
     return match.group(1) if match else None
@@ -984,9 +1043,19 @@ Route/GPS ratio is reconstructed route distance divided by observed GPS distance
 
 This analytical subset does not change `emissions_eligible`, completeness, routing, classification, emissions, or persisted production outputs.
 
-## 5. Modal Distribution
+## 5. Modal Distribution & Pipeline Funnel
+
+### Active Transportation Modes (Pipeline-Valid Routes)
 
 {_markdown_table(tables['mode_summary'])}
+
+### Modal Funnel (All Physical Movements)
+
+{_markdown_table(tables['modal_funnel_summary'])}
+
+### Pipeline Failure & Rejection Reasons
+
+{_markdown_table(tables['failure_reason_summary'])}
 
 ## 6. Trip Distance
 
@@ -1126,6 +1195,7 @@ def generate_quality_report(
     trips, valid, plot_quality, filter_summary, filter_metadata = build_quality_population(outputs.ledger, cfg)
     routing_metrics, routing_table = compute_routing_metrics(trips, valid, plot_quality)
     modal_metrics, mode_table = compute_modal_metrics(valid)
+    funnel_metrics, funnel_table, reasons_table = compute_modal_funnel_metrics(trips)
     emissions_metrics, emissions_tables = compute_emissions_metrics(outputs, valid)
     plot_ids = set(plot_quality["physical_trip_id"].dropna().astype(str))
     sinuosity = compute_segment_sinuosity(outputs.detailed, plot_ids, cfg)
@@ -1157,6 +1227,8 @@ def generate_quality_report(
         "route_quality_distribution": route_distribution,
         "quality_filter_summary": filter_summary,
         "mode_summary": mode_table,
+        "modal_funnel_summary": funnel_table,
+        "failure_reason_summary": reasons_table,
         "trip_distance_by_mode": trip_distance,
         "segment_sinuosity": sinuosity,
         "routed_speed": speeds,
@@ -1190,6 +1262,7 @@ def generate_quality_report(
         "routing": routing_metrics,
         "quality_filter": filter_metadata,
         "modes": modal_metrics,
+        "modal_funnel": funnel_metrics,
         "emissions": emissions_metrics,
         "segment_sinuosity": {"rows": int(len(sinuosity)), **_quantiles(sinuosity.get("segment_sinuosity", pd.Series(dtype=float)))},
         "routed_speed_kmh": {"rows": int(len(speeds)), **_quantiles(speeds.get("speed_kmh", pd.Series(dtype=float)))},

@@ -227,3 +227,18 @@ def test_all_five_requested_figures_are_generated(tmp_path):
     report = generate_quality_report(run, show_figures=False, save_figures=True)
     assert len(report.figure_paths) == 5
     assert all(path.exists() and path.stat().st_size > 0 for path in report.figure_paths)
+
+
+def test_modal_funnel_computation(tmp_path):
+    run = _write_run(tmp_path)
+    report = generate_quality_report(run, show_figures=False, save_figures=False)
+    assert "modal_funnel_summary" in report.tables
+    assert "failure_reason_summary" in report.tables
+    assert (report.output_dir / "tables" / "modal_funnel_summary.csv").exists()
+    assert (report.output_dir / "tables" / "failure_reason_summary.csv").exists()
+    funnel = report.tables["modal_funnel_summary"].set_index("funnel_stage")
+    assert funnel.loc["1. Physical trips detected", "trip_count"] == 4
+    markdown = report.markdown_path.read_text(encoding="utf-8")
+    assert "## 5. Modal Distribution & Pipeline Funnel" in markdown
+    assert "Modal Funnel (All Physical Movements)" in markdown
+
