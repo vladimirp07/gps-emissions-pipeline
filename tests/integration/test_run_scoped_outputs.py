@@ -65,3 +65,31 @@ def test_save_preprocessed_gps_can_be_disabled(monkeypatch, tmp_path):
         source, ageb, output_root=tmp_path / "runs", save_preprocessed_gps=False
     )
     assert not (result.run_dir / "preprocessing" / "preprocessed_gps.parquet").exists()
+
+
+def test_limit_users_uses_first_source_order_for_both_stages(monkeypatch, tmp_path):
+    seen = {}
+
+    monkeypatch.setattr(
+        run_workflow,
+        "supplied_user_ids",
+        lambda source, config: pd.DataFrame({"user_id": ["U3", "U1", "U2"]}),
+    )
+
+    def capture_preprocessing(source_path, ageb_path, output_dir, **kwargs):
+        seen["preprocessing_user_ids"] = kwargs["user_ids"]
+        return _fake_preprocessing(source_path, ageb_path, output_dir, **kwargs)
+
+    def capture_pipeline(gps, output_dir, metadata, **kwargs):
+        seen["pipeline_limit_users"] = kwargs["limit_users"]
+        return _fake_pipeline(gps, output_dir, metadata, **kwargs)
+
+    monkeypatch.setattr(run_workflow, "run_preprocessing", capture_preprocessing)
+    monkeypatch.setattr(run_workflow, "run_pipeline_v4", capture_pipeline)
+    source, ageb = tmp_path / "input.parquet", tmp_path / "ageb.geojson"
+    source.touch(); ageb.touch()
+
+    run_workflow.run_production(source, ageb, output_root=tmp_path / "runs", limit_users=2)
+
+    assert seen["preprocessing_user_ids"] == ["U3", "U1"]
+    assert seen["pipeline_limit_users"] == 2

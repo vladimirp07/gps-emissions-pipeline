@@ -17,7 +17,12 @@ import sklearn
 import pandas as pd
 
 from pipeline_v4.preprocessing.gps_home_sampling.workflow import HomeConfig
-from pipeline_v4.preprocessing.workflow import PreprocessingConfig, PreprocessingResult, run_preprocessing
+from pipeline_v4.preprocessing.workflow import (
+    PreprocessingConfig,
+    PreprocessingResult,
+    run_preprocessing,
+    supplied_user_ids,
+)
 from pipeline_v4.src import config
 from pipeline_v4.src.production_workflow import PipelineV4Result, run_pipeline_v4
 from pipeline_v4.src.random_forest_contract import (
@@ -154,6 +159,15 @@ def run_production(
     start = datetime.now(ZoneInfo(PROJECT_TIMEZONE))
     pre_cfg = preprocessing_config or PreprocessingConfig()
     home_cfg = home_config or HomeConfig(min_nights=config.HOME_MIN_NIGHTS)
+    effective_user_ids = user_ids
+    if limit_users is not None:
+        if user_ids is None:
+            # Select by first appearance in the supplied source.  Preprocessing
+            # sorts rows by user for its transformations, so applying the limit
+            # only after preprocessing would silently change the user's choice.
+            effective_user_ids = supplied_user_ids(source_path, pre_cfg)["user_id"].head(limit_users).tolist()
+        else:
+            effective_user_ids = list(dict.fromkeys(user_ids))[:limit_users]
     commit, dirty = _git_metadata()
     artifact = config.FILE_MODAL_HYBRID if config.MODAL_CLASSIFIER == "hybrid" else config.FILE_MODAL_RANDOM_FOREST
     manifest = {
@@ -220,7 +234,7 @@ def run_production(
         print("[Run 1/2] Starting GPS preprocessing, home metadata, and AGEB attachment...", flush=True)
         preprocessing = run_preprocessing(
             source_path, ageb_path, preprocessing_dir, config=pre_cfg,
-            home_config=home_cfg, user_ids=user_ids,
+            home_config=home_cfg, user_ids=effective_user_ids,
             save_preprocessed_gps=save_preprocessed_gps,
         )
         print(
