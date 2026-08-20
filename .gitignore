@@ -40,33 +40,19 @@ legacy/
 # Local raw datasets, training caches and generated final outputs (specific paths;
 # file extensions remain trackable elsewhere).
 /Inputs/Infrastructure/
-/Inputs/GPS User Data/Datos de MATLAB GPS.csv
-/Inputs/GPS User Data/Datos de MATLAB GPS Limpios.csv
-/Inputs/GPS User Data/top_20users_ALL_DATES.parquet
-/Inputs/GPS User Data/top_20users_1_month.parquet
-/Inputs/GPS User Data/Resultados_Datos_Emisiones_GPS_100_all_v1.1.parquet
-/Inputs/GPS User Data/datos_entrenamiento_ml.pkl
-/Inputs/GPS User Data/datos_entrenamiento_ml_expanded.pkl
-/Inputs/GPS User Data/datos_entrenamiento_optuna.pkl
-/Inputs/GPS User Data/random_forest_modal_expanded_candidate.pkl
-/Inputs/GPS User Data/random_forest_modal_baseline_sklearn180.pkl
-/Inputs/GPS User Data/prueba_dummy_3.parquet
+/Inputs/GPS User Data/
+/Inputs/INPUT_BUNDLE_MANIFEST.csv
 /Outputs/Final Outputs/
 /Outputs/Intermediate Outputs/
 /Outputs/runs/
 /Outputs/calibration_cache/
 /Outputs/diagnostics/
 /Outputs/legacy/
-/Inputs/GPS User Data/Top_users_DIC.parquet
 /Inputs/Preprocessed GPS Emissions Data for tests/
 /Inputs/Tier 1-3 Emissions Inventories Results/
 /Inputs/Supporting input data for bus routes/
 /Inputs/rutas_buses_ZMM_oficial.geojson
 /Inputs/rutas_buses_monterrey.csv
-/Inputs/GPS User Data/auditoria_dataset_ml_expanded.json
-/Inputs/GPS User Data/auditoria_errores_cv.csv
-/Inputs/GPS User Data/metricas_rf_baseline_sklearn180.json
-/Inputs/GPS User Data/metricas_rf_expanded_candidate.json
 /archive/random_forest_experiments/*.csv
 /pipeline_v4/calibration_and_diagnostics/routing_algorithm_calibration/*.csv
 
@@ -97,6 +83,7 @@ visual_content/
 /local_notes/
 /PRODUCTION_GITHUB_PUSH_REVIEW.md
 /PUBLIC_REPOSITORY_CLEANUP_REVIEW.md
+/V4_PRIVATE_INPUT_BUNDLE_REVIEW.md
 /Outputs/production_smoke_tests/
 /outputs/production_smoke_tests/
 **/*confusion_matrix*.png

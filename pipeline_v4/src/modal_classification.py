@@ -579,20 +579,20 @@ class RandomForestRouteEvaluator:
             with self.model_path.open("rb") as handle:
                 saved = pickle.load(handle)
             if saved.get("feature_cols_v4") != list(RF_FEATURES) or saved.get("feature_cols_new") != list(RF_FEATURES):
-                raise ValueError("El orden de features del PKL no coincide con el contrato oficial de 52 variables.")
+                raise ValueError("The PKL feature order does not match the official 52-feature contract.")
             for name in ("clf_n1", "clf_n2", "clf_n3"):
                 classifier = saved.get(name)
                 if classifier is None or getattr(classifier, "n_features_in_", None) != 52:
-                    raise ValueError(f"{name} no es un clasificador compatible de 52 variables.")
+                    raise ValueError(f"{name} is not a compatible 52-feature classifier.")
                 names = list(getattr(classifier, "feature_names_in_", []))
                 if names and names != list(RF_FEATURES):
-                    raise ValueError(f"El orden interno de {name} es incompatible.")
+                    raise ValueError(f"The internal feature order for {name} is incompatible.")
                 setattr(self, name, classifier)
             self.clf = self.clf_n1
             self.loaded_from_disk = True
             print("[RandomForestRouteEvaluator] ML v4 model loaded.", flush=True)
         except Exception as exc:
-            raise RuntimeError(f"No se pudo cargar un PKL RF compatible desde {self.model_path}: {exc}") from exc
+            raise RuntimeError(f"Could not load a compatible RF PKL from {self.model_path}: {exc}") from exc
 
     @staticmethod
     def _speeds(frame):
@@ -649,7 +649,7 @@ class RandomForestRouteEvaluator:
     def extract_features(self, hypotheses, serving_context=None):
         if not isinstance(serving_context, TripServingContext):
             raise ServingContractError(
-                "La inferencia ML requiere TripServingContext con pings GPS y distancias de snapping reales."
+                "ML inference requires TripServingContext with GPS pings and real snapping distances."
             )
         hyps = {str(key).lower(): value for key, value in hypotheses.items()}
         drive = hyps.get("carro") if hyps.get("carro") is not None else hyps.get("bus")
@@ -843,17 +843,19 @@ class HybridRouteEvaluator(RandomForestRouteEvaluator):
             for level, features in expected.items():
                 declared = contract.get(level, {}).get("features")
                 if declared != features:
-                    raise ValueError(f"Orden de variables incompatible en {level}: se esperaban {len(features)}.")
+                    raise ValueError(f"Incompatible feature order in {level}: expected {len(features)} features.")
                 classifier = saved.get(f"clf_{level}")
                 if classifier is None or getattr(classifier, "n_features_in_", None) != len(features):
-                    raise ValueError(f"clf_{level} no acepta las {len(features)} variables del contrato.")
+                    raise ValueError(f"clf_{level} does not accept the {len(features)} contract features.")
                 names = list(getattr(classifier, "feature_names_in_", []))
                 if names and names != features:
-                    raise ValueError(f"Orden interno de clf_{level} incompatible.")
+                    raise ValueError(f"The internal feature order for clf_{level} is incompatible.")
                 setattr(self, f"clf_{level}", classifier)
             threshold = float(contract.get("n3", {}).get("threshold_bus", -1))
             if threshold != BUS_PROBABILITY_THRESHOLD:
-                raise ValueError(f"Umbral Bus incompatible: {threshold}; esperado {BUS_PROBABILITY_THRESHOLD}.")
+                raise ValueError(
+                    f"Incompatible Bus threshold: {threshold}; expected {BUS_PROBABILITY_THRESHOLD}."
+                )
             self.bus_threshold = threshold
             self.clf = self.clf_n1
             self.loaded_from_disk = True
