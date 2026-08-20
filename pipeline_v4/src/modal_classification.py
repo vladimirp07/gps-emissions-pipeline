@@ -2,10 +2,14 @@
 import numpy as np
 import pandas as pd
 import geopandas as gpd
+import shapely
+from pyproj import Transformer
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
+
+_TRANSFORMER_TO_UTM = Transformer.from_crs("EPSG:4326", "EPSG:32614", always_xy=True)
 
 
 class ServingContractError(ValueError):
@@ -119,31 +123,44 @@ def calcular_cercania_infraestructura(
         df["near_bus_route"] = [known[key][1] for key in coordinate_keys]
         return df
 
-    # 1. Proyectar temporalmente sólo coordenadas exactas aún no evaluadas.
-    missing = pd.DataFrame(missing_keys, columns=["longitude", "latitude"])
-    gdf_pts = gpd.GeoDataFrame(
-        missing,
-        geometry=gpd.points_from_xy(missing.longitude, missing.latitude),
-        crs="EPSG:4326",
-    )
-    gdf_pts = gdf_pts.to_crs("EPSG:32614")
+    # 1. Proyectar temporalmente sólo coordenadas exactas aún no evaluadas usando UTM directo
+    missing_lons = np.array([k[0] for k in missing_keys])
+    missing_lats = np.array([k[1] for k in missing_keys])
+    xs, ys = _TRANSFORMER_TO_UTM.transform(missing_lons, missing_lats)
+    pts_geom = shapely.points(xs, ys)
     
-    subway_proj = subway_routes.to_crs("EPSG:32614") if subway_routes.crs != "EPSG:32614" else subway_routes
-    bus_proj = bus_routes.to_crs("EPSG:32614") if bus_routes.crs != "EPSG:32614" else bus_routes
+    subway_proj = subway_routes if subway_routes.crs == "EPSG:32614" else subway_routes.to_crs("EPSG:32614")
+    bus_proj = bus_routes if bus_routes.crs == "EPSG:32614" else bus_routes.to_crs("EPSG:32614")
     
-    RADIO_METRO = 50
-    RADIO_BUS = 20
+    RADIO_METRO = 50.0
+    RADIO_BUS = 20.0
     
-    # 2. Búsqueda Espacial Exacta (sjoin_nearest mide a la LÍNEA, no al centroide)
-    # --- METRO ---
-    metro_join = gpd.sjoin_nearest(gdf_pts, subway_proj, how='left', distance_col='dist_metro')
-    metro_join = metro_join[~metro_join.index.duplicated(keep='first')] # Limpiar empates de distancia
-    near_metro = (metro_join['dist_metro'] < RADIO_METRO).astype(int).to_numpy()
-    
-    # --- BUS ---
-    bus_join = gpd.sjoin_nearest(gdf_pts, bus_proj, how='left', distance_col='dist_bus')
-    bus_join = bus_join[~bus_join.index.duplicated(keep='first')] 
-    near_bus = (bus_join['dist_bus'] < RADIO_BUS).astype(int).to_numpy()
+    # 2. Búsqueda Espacial Exacta por STRtree (bounding box broad-phase) + Distancia Métrica Shapely Exacta
+    near_metro = np.zeros(len(pts_geom), dtype=int)
+    if subway_proj is not None and len(subway_proj) > 0:
+        metro_boxes = shapely.box(xs - RADIO_METRO, ys - RADIO_METRO, xs + RADIO_METRO, ys + RADIO_METRO)
+        metro_matches = subway_proj.sindex.query(metro_boxes, predicate="intersects")
+        if len(metro_matches) > 0 and len(metro_matches[0]) > 0:
+            pt_indices = metro_matches[0]
+            geom_indices = metro_matches[1]
+            subway_geoms = subway_proj.geometry.to_numpy()[geom_indices]
+            dists_metro = shapely.distance(pts_geom[pt_indices], subway_geoms)
+            valid_m = dists_metro < RADIO_METRO
+            if np.any(valid_m):
+                near_metro[pt_indices[valid_m]] = 1
+        
+    near_bus = np.zeros(len(pts_geom), dtype=int)
+    if bus_proj is not None and len(bus_proj) > 0:
+        bus_boxes = shapely.box(xs - RADIO_BUS, ys - RADIO_BUS, xs + RADIO_BUS, ys + RADIO_BUS)
+        bus_matches = bus_proj.sindex.query(bus_boxes, predicate="intersects")
+        if len(bus_matches) > 0 and len(bus_matches[0]) > 0:
+            pt_indices = bus_matches[0]
+            geom_indices = bus_matches[1]
+            bus_geoms = bus_proj.geometry.to_numpy()[geom_indices]
+            dists_bus = shapely.distance(pts_geom[pt_indices], bus_geoms)
+            valid_b = dists_bus < RADIO_BUS
+            if np.any(valid_b):
+                near_bus[pt_indices[valid_b]] = 1
 
     computed = {
         key: (int(metro_value), int(bus_value))
@@ -624,6 +641,39 @@ class RandomForestRouteEvaluator:
             best = max(best, current)
         return float(best)
 
+    @staticmethod
+    def _window_values_fast(timestamps_series, values_arr, min_points=3, window_sec=180, step_sec=30, agg='mean'):
+        if timestamps_series is None or len(timestamps_series) == 0:
+            return []
+        ts = pd.to_datetime(timestamps_series)
+        if ts.isna().all():
+            return []
+        ts_ns = ts.astype('datetime64[ns]').astype('int64').to_numpy()
+        vals = np.asarray(values_arr, dtype=float)
+        if len(ts_ns) <= 1:
+            return []
+        if not np.all(ts_ns[:-1] <= ts_ns[1:]):
+            sort_order = np.argsort(ts_ns, kind='stable')
+            ts_ns = ts_ns[sort_order]
+            vals = vals[sort_order]
+        start_ns = ts_ns[0]
+        max_ns = ts_ns[-1]
+        window_ns = int(window_sec * 1_000_000_000)
+        step_ns = int(step_sec * 1_000_000_000)
+        res = []
+        curr_ns = start_ns
+        while curr_ns + window_ns <= max_ns:
+            end_ns = curr_ns + window_ns
+            i_start = np.searchsorted(ts_ns, curr_ns, side='left')
+            i_end = np.searchsorted(ts_ns, end_ns, side='right')
+            count = i_end - i_start
+            if count >= min_points:
+                slice_val = vals[i_start:i_end]
+                val = np.sum(slice_val) if agg == 'sum' else np.mean(slice_val)
+                res.append(float(val))
+            curr_ns += step_ns
+        return res
+
     def _window_values(self, frame, value_fn):
         if frame is None or frame.empty or "local_timestamp" not in frame:
             return []
@@ -724,10 +774,27 @@ class RandomForestRouteEvaluator:
                 row["drive_mean_stop_interval"] = float(np.mean(intervals))
                 row["drive_std_stop_interval"] = float(np.std(intervals))
 
-        metro_windows = self._window_values(metro, lambda part: np.mean(part.get("near_subway_line", 0) == 1))
-        bus_windows = self._window_values(drive, lambda part: np.mean(part.get("near_bus_route", 0) == 1))
-        stop_windows = self._window_values(drive, lambda part: np.sum(self._speeds(part) < 2.0))
-        walk_windows = self._window_values(walk, lambda part: np.mean((self._speeds(part) >= 2.0) & (self._speeds(part) <= 6.0)))
+        if metro is not None and not metro.empty and "local_timestamp" in metro:
+            vals_m = (metro.get("near_subway_line", 0) == 1).to_numpy(dtype=float)
+            metro_windows = self._window_values_fast(metro["local_timestamp"], vals_m, agg='mean')
+        else:
+            metro_windows = []
+
+        if drive is not None and not drive.empty and "local_timestamp" in drive:
+            bus_vals = (drive.get("near_bus_route", 0) == 1).to_numpy(dtype=float)
+            bus_windows = self._window_values_fast(drive["local_timestamp"], bus_vals, agg='mean')
+            stop_vals = (self._speeds(drive) < 2.0).astype(float)
+            stop_windows = self._window_values_fast(drive["local_timestamp"], stop_vals, agg='sum')
+        else:
+            bus_windows, stop_windows = [], []
+
+        if walk is not None and not walk.empty and "local_timestamp" in walk:
+            w_speeds = self._speeds(walk)
+            walk_regime = ((w_speeds >= 2.0) & (w_speeds <= 6.0)).astype(float)
+            walk_windows = self._window_values_fast(walk["local_timestamp"], walk_regime, agg='mean')
+        else:
+            walk_windows = []
+
         row["metro_win_near_metro_max"] = max(metro_windows, default=0.0)
         row["metro_win_near_metro_p90"] = float(np.percentile(metro_windows, 90)) if metro_windows else 0.0
         row["metro_win_near_metro_consec_run"] = self._max_run(np.array(metro_windows) > 0.7)

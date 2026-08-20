@@ -16,6 +16,7 @@ from typing import Any
 import geopandas as gpd
 from joblib import Parallel, delayed
 import pandas as pd
+import shapely
 from shapely import wkt
 from tqdm.auto import tqdm
 
@@ -41,6 +42,7 @@ from pipeline_v4.src.random_forest_contract import MIN_EFFECTIVE_PINGS, MIN_PCT_
 from pipeline_v4.src.route_quality import QUALITY_COLUMNS, attach_route_quality, evaluate_route_quality
 from pipeline_v4.src.routing import (
     RouteHypothesisEvaluator,
+    TRANSFORMER_TO_UTM,
     build_candidate_edge_index,
     get_candidates_vectorized,
 )
@@ -240,13 +242,14 @@ def process_user_day(user_id: object, day_frame: pd.DataFrame, resources: dict[s
     )
     latitude = "lat_ruteo" if "lat_ruteo" in effective_day.columns else "latitude"
     longitude = "lon_ruteo" if "lon_ruteo" in effective_day.columns else "longitude"
-    # Candidate generation only needs point geometry; carrying all GPS columns into
-    # two spatial joins caused the observed memory amplification.
+    # Candidate generation only needs point geometry in network CRS (UTM 14N).
+    # Using direct pyproj transform + shapely.points eliminates GeoDataFrame.to_crs overhead.
+    xs, ys = TRANSFORMER_TO_UTM.transform(effective_day[longitude].to_numpy(), effective_day[latitude].to_numpy())
     points = gpd.GeoDataFrame(
         index=effective_day.index,
-        geometry=gpd.points_from_xy(effective_day[longitude], effective_day[latitude]),
-        crs="EPSG:4326",
-    ).to_crs(resources["edges_drive"].crs)
+        geometry=shapely.points(xs, ys),
+        crs=resources["edges_drive"].crs,
+    )
     effective_day["drive_ids"], effective_day["drive_dists"] = get_candidates_vectorized(
         resources.get("candidate_edges_drive", resources["edges_drive"]), points, buffer_m=150
     )
@@ -370,8 +373,21 @@ def process_user_day(user_id: object, day_frame: pd.DataFrame, resources: dict[s
     )
 
 
-def _read_frame(value: pd.DataFrame | str | Path) -> pd.DataFrame:
-    return value.copy() if isinstance(value, pd.DataFrame) else pd.read_parquet(value)
+def _read_frame(value: pd.DataFrame | str | Path, columns: list[str] | None = None) -> pd.DataFrame:
+    if isinstance(value, pd.DataFrame):
+        if columns is not None:
+            avail = [c for c in columns if c in value.columns]
+            return value[avail].copy()
+        return value.copy()
+    if columns is not None:
+        try:
+            import pyarrow.parquet as pq
+            schema = pq.read_schema(value)
+            avail = [c for c in columns if c in schema.names]
+            return pd.read_parquet(value, columns=avail)
+        except Exception:
+            pass
+    return pd.read_parquet(value)
 
 
 def _process_indexed_user_day(task_index, user_id, day, loaded_resources):
@@ -420,7 +436,11 @@ def run_pipeline_v4(
     """Produce routes, individual emissions, and the canonical trip ledger."""
     output_mode = validate_output_mode(output_mode)
     print("[Pipeline] Loading preprocessed GPS...", flush=True)
-    gps = _read_frame(preprocessed_gps)
+    gps_cols = [
+        "caid", "user_id", "local_timestamp", "latitude", "longitude",
+        "lat_ruteo", "lon_ruteo", "Speed [km/h]", "dis lineal [m]", "trip", "travel time",
+    ]
+    gps = _read_frame(preprocessed_gps, columns=gps_cols)
     required = {"caid", "local_timestamp", "latitude", "longitude"}
     missing = sorted(required - set(gps.columns))
     if missing:

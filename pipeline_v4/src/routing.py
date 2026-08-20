@@ -132,32 +132,30 @@ def get_candidates_vectorized(edges_gdf, gdf_points, buffer_m=150, max_cands=12)
     joined = joined.sort_values('dist_exacta')
     joined = joined.groupby(level=0).head(max_cands)
     
-    # 4. Expandir u/v en el mismo orden row-major del ensamblado histórico.
-    # ``tolist`` preserves native Python scalar types, duplicates, and tie order.
-    point_index = joined.index.to_numpy().repeat(2)
-    candidate_ids = joined[['u', 'v']].to_numpy(copy=False).reshape(-1).tolist()
-    candidate_distances = joined['dist_exacta'].to_numpy(copy=False).repeat(2).tolist()
-    ids_grouped = pd.Series(candidate_ids, index=point_index, dtype=object).groupby(
-        level=0, sort=False
-    ).agg(list)
-    distances_grouped = pd.Series(candidate_distances, index=point_index, dtype=object).groupby(
-        level=0, sort=False
-    ).agg(list)
-
-    # 5. Reindexar sin perder puntos GPS sin candidato.
-    ids = ids_grouped.reindex(gdf_points.index)
-    distances = distances_grouped.reindex(gdf_points.index)
-    missing_ids = ids.isna()
-    missing_distances = distances.isna()
-    if missing_ids.any():
-        ids.loc[missing_ids] = pd.Series(
-            [[] for _ in range(int(missing_ids.sum()))], index=ids.index[missing_ids], dtype=object
-        )
-    if missing_distances.any():
-        distances.loc[missing_distances] = pd.Series(
-            [[] for _ in range(int(missing_distances.sum()))],
-            index=distances.index[missing_distances], dtype=object,
-        )
+    # 4. Fast preallocated grouping matching exact row-major u/v order and ties
+    n_points = len(gdf_points)
+    point_idx_arr = joined.index.to_numpy()
+    u_arr = joined['u'].to_numpy()
+    v_arr = joined['v'].to_numpy()
+    dist_arr = joined['dist_exacta'].to_numpy()
+    
+    out_ids = [[] for _ in range(n_points)]
+    out_dists = [[] for _ in range(n_points)]
+    pos_map = {}
+    for i, idx in enumerate(gdf_points.index):
+        pos_map.setdefault(idx, []).append(i)
+    
+    for i in range(len(point_idx_arr)):
+        pt_positions = pos_map[point_idx_arr[i]]
+        u = u_arr[i]
+        v = v_arr[i]
+        d = dist_arr[i]
+        for pt_pos in pt_positions:
+            out_ids[pt_pos].extend([u, v])
+            out_dists[pt_pos].extend([d, d])
+        
+    ids = pd.Series(out_ids, index=gdf_points.index, dtype=object)
+    distances = pd.Series(out_dists, index=gdf_points.index, dtype=object)
     return ids, distances
 
 
