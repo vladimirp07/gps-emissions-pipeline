@@ -98,6 +98,9 @@ the same network build.
 All paths are repository-relative or configurable. Each execution writes only
 to `Outputs/runs/<run_id>/`.
 
+Optional post-run quality diagnostics can be enabled from the canonical
+notebook and can also be generated for an existing run directory.
+
 ## Main outputs
 
 ```text
