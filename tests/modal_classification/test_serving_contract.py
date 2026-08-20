@@ -48,3 +48,13 @@ def test_missing_routed_infrastructure_features_fails_visibly():
     incomplete = _route(30).drop(columns="near_bus_route")
     with pytest.raises(ServingContractError, match="near_bus_route"):
         evaluator.extract_features({"Carro": incomplete}, serving_context=context)
+
+
+def test_promoted_n1_contract_features_and_no_footway_dependency():
+    from pipeline_v4.src.random_forest_contract import N1_FEATURES
+    evaluator = create_modal_evaluator("hybrid")
+    assert len(evaluator.n1_features) == 15
+    assert "walk_highway_footway_frac" not in evaluator.n1_features
+    assert evaluator.clf_n1.n_features_in_ == 15
+    assert list(evaluator.clf_n1.feature_names_in_) == list(N1_FEATURES)
+

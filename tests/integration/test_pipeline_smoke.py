@@ -34,11 +34,15 @@ class TestPipelineSmoke(unittest.TestCase):
     def tearDownClass(cls): cls.tmp.cleanup()
 
     @staticmethod
-    def _frame(rng, case, speed, highway, near_bus, near_metro, snap_drive, snap_walk):
+    def _frame(rng, case, speed, highway, near_bus, near_metro, snap_drive, snap_walk, stops=False):
         n = 20; timestamps = pd.date_range("2026-07-15 08:00", periods=n, freq="30s")
+        speeds = np.clip(rng.normal(speed, max(1, speed * .3), n), 0, 140)
+        if stops:
+            for i in range(3, n, 4):
+                speeds[i] = 0.5
         frame = pd.DataFrame({
             "caid": [f"SMOKE{case}"] * n, "trip": [1] * n,
-            "Speed [km/h]": np.clip(rng.normal(speed, max(1, speed * .3), n), 0, 140),
+            "Speed [km/h]": speeds,
             "local_timestamp": timestamps, "highway": [highway] * n,
             "distance_m": np.maximum(1, rng.normal(max(10, speed * 8), 10, n)),
             "near_bus_route": rng.binomial(1, near_bus, n), "near_subway_line": rng.binomial(1, near_metro, n),
@@ -51,23 +55,40 @@ class TestPipelineSmoke(unittest.TestCase):
 
     def _representative_hypotheses(self):
         rng = np.random.default_rng(3); found = {}
-        for case in range(300):
-            def frame(speed, highway, nb, nm, sd, sw): return self._frame(rng, case, speed, highway, nb, nm, sd, sw)
-            hypotheses = {
-                "Carro": frame(rng.uniform(2, 80), rng.choice(["primary", "residential", "secondary"]), rng.random(), rng.random() * .2, rng.uniform(1, 100), rng.uniform(1, 50)),
-                "Caminar": frame(rng.uniform(1, 25), rng.choice(["footway", "path", "residential"]), rng.random() * .2, rng.random() * .2, rng.uniform(1, 100), rng.uniform(1, 30)),
-                "Metro": frame(rng.uniform(10, 80), "railway", 0, rng.random(), rng.uniform(1, 100), rng.uniform(1, 30)),
-            }
-            context = TripServingContext(
-                20, 20,
-                tuple(hypotheses["Carro"]["snap_dist_drive"].astype(float)),
-                tuple(hypotheses["Carro"]["snap_dist_walk"].astype(float)),
-            )
-            result = self.evaluator.evaluate_with_contract(hypotheses, serving_context=context)
-            mode = result["final_class"]
-            if mode in {"Carro", "Bus", "Metro", "Caminar"} and mode not in found:
-                found[mode] = (result, hypotheses)
-            if len(found) == 4: break
+        # 1. Caminar
+        h_walk = {
+            "Caminar": self._frame(rng, 1, 4.0, "footway", 0.0, 0.0, 50.0, 2.0),
+            "Carro": self._frame(rng, 1, 2.0, "residential", 0.0, 0.0, 50.0, 2.0),
+        }
+        ctx_walk = TripServingContext(20, 20, (50.0,)*20, (2.0,)*20)
+        res_walk = self.evaluator.evaluate_with_contract(h_walk, serving_context=ctx_walk)
+        found[res_walk["final_class"]] = (res_walk, h_walk)
+
+        # 2. Carro
+        h_car = {
+            "Carro": self._frame(rng, 2, 65.0, "primary", 0.0, 0.0, 3.0, 25.0),
+        }
+        ctx_car = TripServingContext(20, 20, (3.0,)*20, (25.0,)*20)
+        res_car = self.evaluator.evaluate_with_contract(h_car, serving_context=ctx_car)
+        found[res_car["final_class"]] = (res_car, h_car)
+
+        # 3. Metro
+        h_metro = {
+            "Carro": self._frame(rng, 3, 40.0, "primary", 0.0, 0.9, 10.0, 25.0),
+            "Metro": self._frame(rng, 3, 45.0, "railway", 0.0, 1.0, 10.0, 25.0),
+        }
+        ctx_metro = TripServingContext(20, 20, (10.0,)*20, (25.0,)*20)
+        res_metro = self.evaluator.evaluate_with_contract(h_metro, serving_context=ctx_metro)
+        found[res_metro["final_class"]] = (res_metro, h_metro)
+
+        # 4. Bus
+        h_bus = {
+            "Carro": self._frame(rng, 4, 25.0, "primary", 1.0, 0.0, 3.0, 25.0, stops=True),
+        }
+        ctx_bus = TripServingContext(20, 20, (3.0,)*20, (25.0,)*20)
+        res_bus = self.evaluator.evaluate_with_contract(h_bus, serving_context=ctx_bus)
+        found[res_bus["final_class"]] = (res_bus, h_bus)
+
         return found
 
     def test_small_end_to_end_four_modes(self):

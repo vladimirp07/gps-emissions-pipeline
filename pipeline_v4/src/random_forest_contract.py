@@ -57,7 +57,7 @@ BUS_PROBABILITY_THRESHOLD = 0.50
 N1_FEATURES = (
     "drive_mean_speed", "drive_max_speed", "drive_stop_frac",
     "walk_mean_speed", "walk_max_speed", "walk_std_speed",
-    "walk_highway_footway_frac", "walk_p25_speed", "walk_p50_speed",
+    "walk_p25_speed", "walk_p50_speed",
     "walk_p75_speed", "mean_snap_dist_drive", "mean_snap_dist_walk",
     "std_snap_dist_drive", "std_snap_dist_walk",
     "walk_win_walk_regime_max", "walk_win_walk_regime_consec_run",
@@ -79,14 +79,14 @@ N3_FEATURES = (
 )
 
 HYBRID_HYPERPARAMETERS = {
-    "n1": {"n_estimators": 100, "learning_rate": 0.05, "max_depth": 2,
-           "min_samples_leaf": 4, "random_state": 42},
+    "n1": {"n_estimators": 100, "max_depth": 6, "min_samples_leaf": 2,
+           "class_weight": "balanced", "random_state": 42},
     "n2": RF_HYPERPARAMETERS["n2"],
     "n3": {"n_estimators": 200, "max_depth": 8, "min_samples_leaf": 2,
            "class_weight": "balanced", "random_state": 42, "n_jobs": 3},
 }
 
-assert len(N1_FEATURES) == 16
+assert len(N1_FEATURES) == 15
 assert len(N2_FEATURES) == 52
 assert len(N3_FEATURES) == 25
 assert set(N1_FEATURES).issubset(RF_FEATURES)
