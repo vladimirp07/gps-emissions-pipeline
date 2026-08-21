@@ -62,6 +62,9 @@ def test_pipeline_wrapper_uses_routing_eligibility_not_home_quality(monkeypatch,
     })
     calls = []
 
+
+
+
     def fake_process(user_id, day_frame, resources):
         calls.append(user_id)
         routes = pd.DataFrame({
@@ -100,3 +103,75 @@ def test_pipeline_wrapper_uses_routing_eligibility_not_home_quality(monkeypatch,
     assert result.output_artifacts["detailed_output"]["generated"] is False
     assert len(result.trip_ledger) == 2
     assert result.trip_ledger.iloc[0].processing_status == "success"
+
+
+def test_global_progress_bar_accounting_and_lifecycle(monkeypatch, tmp_path):
+    gps = pd.DataFrame({
+        "caid": [101, 101, 202, 202, 303, 303],
+        "local_timestamp": pd.to_datetime([
+            "2026-01-01 08:00", "2026-01-02 08:00",
+            "2026-01-01 08:00", "2026-01-02 08:00",
+            "2026-01-01 08:00", "2026-01-02 08:00",
+        ]),
+        "latitude": [25.68] * 6, "longitude": [-100.31] * 6,
+    })
+    metadata = pd.DataFrame({
+        "user_id": [101, 202, 303], "routing_eligible": [True] * 3,
+    })
+
+    def fake_process(user_id, day_frame, resources):
+        day = day_frame.local_timestamp.iloc[0].strftime("%Y-%m-%d")
+        ledger = pd.DataFrame([{
+            "user_id": user_id, "trip_id": 1, "physical_trip_id": f"{user_id}_{day}_1",
+            "processing_status": "quality_rejected", "failure_reason": "fixture",
+            "raw_ping_count": 1, "effective_ping_count": 1,
+            "pct_pings_conserved": 100.0, "classification_success": False,
+            "route_success": False, "emissions_success": False,
+        }])
+        return production_workflow.DayProcessingResult(pd.DataFrame(), ledger)
+
+    monkeypatch.setattr(production_workflow, "process_user_day", fake_process)
+
+    class TrackedProgressBar:
+        def __init__(self, total, **kwargs):
+            self.total = total
+            self.kwargs = kwargs
+            self.updates = []
+            self.closed = False
+
+        def update(self, n=1):
+            self.updates.append(n)
+
+        def close(self):
+            self.closed = True
+
+    created_bars = []
+
+    def mock_tqdm(*args, **kwargs):
+        bar = TrackedProgressBar(*args, **kwargs)
+        created_bars.append(bar)
+        return bar
+
+    monkeypatch.setattr(production_workflow, "tqdm", mock_tqdm)
+
+    # 1. Run with show_progress=True and batch_size=2 across 6 user-days
+    production_workflow.run_pipeline_v4(
+        gps, tmp_path / "run_progress_true", metadata, n_jobs=2,
+        resources={"fixture": True}, output_mode="summary",
+        user_day_batch_size=2, show_progress=True,
+    )
+    assert len(created_bars) == 1
+    bar = created_bars[0]
+    assert bar.total == 6
+    assert bar.kwargs.get("desc") == "Processing user-days"
+    assert sum(bar.updates) == 6
+    assert bar.closed is True
+
+    # 2. Run with show_progress=False
+    created_bars.clear()
+    production_workflow.run_pipeline_v4(
+        gps, tmp_path / "run_progress_false", metadata, n_jobs=2,
+        resources={"fixture": True}, output_mode="summary",
+        user_day_batch_size=2, show_progress=False,
+    )
+    assert len(created_bars) == 0

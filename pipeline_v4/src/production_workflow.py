@@ -395,7 +395,12 @@ def _process_indexed_user_day(task_index, user_id, day, loaded_resources):
     return task_index, process_user_day(user_id, day, loaded_resources)
 
 
-def _run_user_day_tasks(tasks, loaded_resources, n_jobs: int, show_progress: bool):
+def _run_user_day_tasks(
+    tasks,
+    loaded_resources,
+    n_jobs: int,
+    progress: Any = None,
+):
     """Run one bounded task window with deterministic output order."""
     parallel = Parallel(n_jobs=n_jobs, backend="threading", return_as="generator_unordered")
     task_results = parallel(
@@ -403,19 +408,22 @@ def _run_user_day_tasks(tasks, loaded_resources, n_jobs: int, show_progress: boo
         for task_index, user_id, day_frame in tasks
     )
     completed = []
-    progress = (
-        tqdm(total=len(tasks), desc="Routing user-days", unit="task", dynamic_ncols=True)
-        if show_progress
-        else None
-    )
+    local_pbar = None
+    if isinstance(progress, bool):
+        if progress:
+            local_pbar = tqdm(total=len(tasks), desc="Processing user-days", unit="task", dynamic_ncols=True)
+        pbar = local_pbar
+    else:
+        pbar = progress
+
     try:
         for task_result in task_results:
             completed.append(task_result)
-            if progress is not None:
-                progress.update(1)
+            if pbar is not None and hasattr(pbar, "update"):
+                pbar.update(1)
     finally:
-        if progress is not None:
-            progress.close()
+        if local_pbar is not None:
+            local_pbar.close()
     return [result for _, result in sorted(completed, key=lambda item: item[0])]
 
 
@@ -498,22 +506,32 @@ def run_pipeline_v4(
         flush=True,
     )
     route_frames, ledger_frames = [], []
-    for batch_number, start in enumerate(range(0, len(task_specs), batch_size), start=1):
-        window_specs = task_specs[start:start + batch_size]
-        window_tasks = [
-            (start + offset, user_id, gps.iloc[group_indices[(user_id, day)]].copy())
-            for offset, (user_id, day) in enumerate(window_specs)
-        ]
-        print(
-            f"[Pipeline] Processing user-day batch {batch_number}/{batch_count}...",
-            flush=True,
+    progress_bar = (
+        tqdm(
+            total=total_user_days,
+            desc="Processing user-days",
+            unit="task",
+            dynamic_ncols=True,
         )
-        window_results = _run_user_day_tasks(
-            window_tasks, loaded_resources, n_jobs, show_progress
-        )
-        route_frames.extend(result.routes for result in window_results if not result.routes.empty)
-        ledger_frames.extend(result.trip_ledger for result in window_results if not result.trip_ledger.empty)
-        del window_results, window_tasks, window_specs
+        if show_progress and total_user_days > 0
+        else None
+    )
+    try:
+        for batch_number, start in enumerate(range(0, len(task_specs), batch_size), start=1):
+            window_specs = task_specs[start:start + batch_size]
+            window_tasks = [
+                (start + offset, user_id, gps.iloc[group_indices[(user_id, day)]].copy())
+                for offset, (user_id, day) in enumerate(window_specs)
+            ]
+            window_results = _run_user_day_tasks(
+                window_tasks, loaded_resources, n_jobs, progress=progress_bar
+            )
+            route_frames.extend(result.routes for result in window_results if not result.routes.empty)
+            ledger_frames.extend(result.trip_ledger for result in window_results if not result.trip_ledger.empty)
+            del window_results, window_tasks, window_specs
+    finally:
+        if progress_bar is not None:
+            progress_bar.close()
     del task_specs, group_indices
     print("[Pipeline] Routing and modal inference complete.", flush=True)
     routes = pd.concat(route_frames, ignore_index=True) if route_frames else pd.DataFrame()
