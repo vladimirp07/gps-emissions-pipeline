@@ -529,11 +529,13 @@ class BayesianRouteEvaluator:
 
 
 try:
+    from . import random_forest_contract
     from .random_forest_contract import (
         BUS_PROBABILITY_THRESHOLD, MIN_EFFECTIVE_PINGS, MIN_PCT_CONSERVED,
         N1_FEATURES, N2_FEATURES, N3_FEATURES, RF_FEATURES,
     )
 except ImportError:
+    import random_forest_contract
     from random_forest_contract import (
         BUS_PROBABILITY_THRESHOLD, MIN_EFFECTIVE_PINGS, MIN_PCT_CONSERVED,
         N1_FEATURES, N2_FEATURES, N3_FEATURES, RF_FEATURES,
@@ -813,8 +815,10 @@ class RandomForestRouteEvaluator:
         if not isinstance(serving_context, TripServingContext):
             raise ServingContractError("Falta TripServingContext para aplicar el guardrail GPS.")
         any_frame = next(iter(hypotheses.values()))
-        if (serving_context.effective_ping_count < MIN_EFFECTIVE_PINGS or
-                serving_context.pct_pings_conserved < MIN_PCT_CONSERVED):
+        min_pings = getattr(random_forest_contract, "MIN_EFFECTIVE_PINGS", MIN_EFFECTIVE_PINGS)
+        min_pct = getattr(random_forest_contract, "MIN_PCT_CONSERVED", MIN_PCT_CONSERVED)
+        if (serving_context.effective_ping_count < min_pings or
+                serving_context.pct_pings_conserved < min_pct):
             return "Calidad insuficiente", None, 0.0, {mode: 0.0 for mode in self.modos}
 
         extracted = self.extract_features(hypotheses, serving_context=serving_context)
@@ -947,8 +951,10 @@ class GuardrailedBayesianRouteEvaluator(BayesianRouteEvaluator):
             return None, None, 0.0, {}
         if not isinstance(serving_context, TripServingContext):
             raise ServingContractError("Falta TripServingContext para aplicar el guardrail GPS.")
-        if (serving_context.effective_ping_count < MIN_EFFECTIVE_PINGS or
-                serving_context.pct_pings_conserved < MIN_PCT_CONSERVED):
+        min_pings = getattr(random_forest_contract, "MIN_EFFECTIVE_PINGS", MIN_EFFECTIVE_PINGS)
+        min_pct = getattr(random_forest_contract, "MIN_PCT_CONSERVED", MIN_PCT_CONSERVED)
+        if (serving_context.effective_ping_count < min_pings or
+                serving_context.pct_pings_conserved < min_pct):
             return "Calidad insuficiente", None, 0.0, {mode: 0.0 for mode in self.modos}
         return super().select_final_mode(hypotheses, subway_routes, bus_routes)
 

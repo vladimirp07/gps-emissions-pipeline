@@ -52,6 +52,11 @@
     "car_to_bus": 37,
     "bus_to_car": 18
   },
-  "guardrail": {"minimum_effective_pings": 15, "minimum_percent_conserved": 30.0},
+  "guardrail": {
+    "original_training_minimum_effective_pings": 15,
+    "validated_serving_minimum_effective_pings": 8,
+    "minimum_percent_conserved": 30.0,
+    "validation_evidence": "Outputs/ground_truth_sparse_validation.csv"
+  },
   "rollback_artifact": "random_forest_modal.pkl"
 }

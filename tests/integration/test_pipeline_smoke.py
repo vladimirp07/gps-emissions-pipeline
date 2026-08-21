@@ -112,22 +112,30 @@ class TestPipelineSmoke(unittest.TestCase):
             self.assertEqual(validate_routing_output(routed), [])
             self.assertEqual(classification["quality_status"], "accepted")
             self.assertAlmostEqual(sum(classification["probabilities"].values()), 1.0, places=6)
-            emitted = calculate_emissions(routed, self.lookup)
-            self.assertEqual(set(emitted.physical_trip_id), set(routed.physical_trip_id))
-            self.assertTrue(emitted.local_timestamp.is_monotonic_increasing)
-            self.assertTrue(np.array_equal(emitted.distance_m.to_numpy(), routed.distance_m.to_numpy()))
-            self.assertFalse(emitted.duplicated(["physical_trip_id", "local_timestamp", "osmid"]).any())
-            self.assertTrue((emitted.modo_transporte == expected).all())
-            output_rows.append({"physical_trip_id": emitted.physical_trip_id.iloc[0], "mode": expected,
-                                "segments": len(emitted), "distance_m": float(emitted.distance_m.sum()),
-                                "total_CO2_g": float(emitted.Total_CO2_g.sum()), "status": "PASS"})
+            
+            is_vehicular = expected in {"Carro", "Bus"}
+            if is_vehicular:
+                emitted = calculate_emissions(routed, self.lookup)
+                self.assertEqual(set(emitted.physical_trip_id), set(routed.physical_trip_id))
+                self.assertTrue(emitted.local_timestamp.is_monotonic_increasing)
+                self.assertTrue(np.array_equal(emitted.distance_m.to_numpy(), routed.distance_m.to_numpy()))
+                self.assertFalse(emitted.duplicated(["physical_trip_id", "local_timestamp", "osmid"]).any())
+                self.assertTrue((emitted.modo_transporte == expected).all())
+                total_co2 = float(emitted.Total_CO2_g.sum())
+                self.assertGreater(total_co2, 0.0)
+            else:
+                total_co2 = 0.0
+            
+            output_rows.append({"physical_trip_id": routed.physical_trip_id.iloc[0], "mode": expected,
+                                "segments": len(routed), "distance_m": float(routed.distance_m.sum()),
+                                "total_CO2_g": total_co2, "status": "PASS"})
         pd.DataFrame(output_rows).to_csv(self.smoke / "end_to_end_results.csv", index=False)
         (self.smoke / "smoke_test.log").write_text("pipeline_v4_production end-to-end: PASS\n", encoding="utf-8")
 
     def test_degraded_guardrail_and_explicit_failure(self):
         hypotheses = next(iter(self._representative_hypotheses().values()))[1]
         short = {name: frame.iloc[:10].copy() for name, frame in hypotheses.items()}
-        context = TripServingContext(20, 10, (10.0,) * 10, (5.0,) * 10)
+        context = TripServingContext(20, 5, (10.0,) * 5, (5.0,) * 5)
         result = self.evaluator.evaluate_with_contract(short, serving_context=context)
         self.assertEqual(result["final_class"], "Calidad insuficiente")
         self.assertEqual(result["rejection_reason"], "quality_guardrail")

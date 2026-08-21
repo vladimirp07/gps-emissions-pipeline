@@ -63,8 +63,8 @@ LEDGER_OUTPUT_COLUMNS = (
     "endpoint_start_error_m", "endpoint_end_error_m", "unresolved_transition_count",
     "reconstructed_distance_m", "gps_distance_m", "route_coverage_fraction",
     "route_completeness_status",
-    "final_mode", "classification_success",
-    "emissions_eligible", "emissions_success",
+    "final_mode", "classification_success", "modal_usable",
+    "emissions_eligible", "emissions_usable", "emissions_success",
     "processing_status", "failure_reason",
 )
 

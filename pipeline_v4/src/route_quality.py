@@ -204,3 +204,42 @@ def attach_route_quality(route: pd.DataFrame, metrics: dict) -> pd.DataFrame:
         "reconstructed_components_only" if status == "partial" else "not_eligible",
     )
     return result
+
+
+def is_strict_emissions_usable(
+    final_mode: str | None,
+    modal_usable: bool,
+    quality: dict,
+) -> bool:
+    """Explicit production predicate for strict vehicular link-level emissions eligibility."""
+    if not modal_usable:
+        return False
+    if final_mode not in {"Carro", "Bus"}:
+        return False
+    
+    status = quality.get("route_completeness_status")
+    if status not in {"complete", "partial"}:
+        return False
+    
+    reconstructed_m = quality.get("reconstructed_distance_m")
+    if reconstructed_m is None or not np.isfinite(reconstructed_m) or reconstructed_m <= 0:
+        return False
+    
+    ratio = quality.get("route_gps_ratio")
+    if ratio is None or not np.isfinite(ratio) or ratio < 0.50 or ratio > 2.0:
+        return False
+    
+    gap = quality.get("max_continuity_gap_m")
+    if gap is None or not np.isfinite(gap) or gap > 100.0:
+        return False
+    
+    uncovered = quality.get("uncovered_fraction")
+    if uncovered is None or not np.isfinite(uncovered) or uncovered > 0.20:
+        return False
+    
+    failed_frac = quality.get("failed_row_fraction")
+    if failed_frac is None or not np.isfinite(failed_frac) or failed_frac > 0.20:
+        return False
+    
+    return True
+

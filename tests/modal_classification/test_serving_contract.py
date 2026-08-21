@@ -22,12 +22,22 @@ def _route(rows=100):
 
 def test_guardrail_cannot_count_routing_subsegments_as_gps_pings():
     evaluator = create_modal_evaluator("hybrid")
-    context = TripServingContext(13, 13, (12.0,) * 13, (7.0,) * 13)
+    context = TripServingContext(5, 5, (12.0,) * 5, (7.0,) * 5)
     mode, selected, _, _ = evaluator.select_final_mode(
         {"Carro": _route(120)}, serving_context=context
     )
     assert mode == "Calidad insuficiente"
     assert selected is None
+
+
+def test_sparse_pings_between_8_and_14_are_admitted_and_evaluated():
+    evaluator = create_modal_evaluator("hybrid")
+    context = TripServingContext(10, 10, (12.0,) * 10, (7.0,) * 10)
+    mode, selected, _, _ = evaluator.select_final_mode(
+        {"Carro": _route(20)}, serving_context=context
+    )
+    assert mode != "Calidad insuficiente"
+    assert selected is not None
 
 
 def test_snap_features_follow_training_semantics_not_placeholders():

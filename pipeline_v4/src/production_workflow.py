@@ -38,8 +38,14 @@ from pipeline_v4.src.output_schema import (
     validate_output_mode,
     write_output_artifact,
 )
+from pipeline_v4.src import random_forest_contract
 from pipeline_v4.src.random_forest_contract import MIN_EFFECTIVE_PINGS, MIN_PCT_CONSERVED
-from pipeline_v4.src.route_quality import QUALITY_COLUMNS, attach_route_quality, evaluate_route_quality
+from pipeline_v4.src.route_quality import (
+    QUALITY_COLUMNS,
+    attach_route_quality,
+    evaluate_route_quality,
+    is_strict_emissions_usable,
+)
 from pipeline_v4.src.routing import (
     RouteHypothesisEvaluator,
     TRANSFORMER_TO_UTM,
@@ -56,7 +62,7 @@ LEDGER_COLUMNS = (
     "pre_routing_quality_status",
     "hypotheses_attempted", "hypotheses_successful", "hypotheses_attempted_count",
     "hypotheses_successful_count", "route_success", "final_mode",
-    "classification_success", *QUALITY_COLUMNS, "emissions_success",
+    "classification_success", "modal_usable", *QUALITY_COLUMNS, "emissions_usable", "emissions_success",
 )
 
 
@@ -171,7 +177,9 @@ def _ensure_ledger_schema(ledger: pd.DataFrame) -> pd.DataFrame:
         "gps_distance_m": 0.0,
         "route_coverage_fraction": 0.0,
         "route_completeness_status": "complete",
+        "modal_usable": False,
         "emissions_eligible": legacy_eligible,
+        "emissions_usable": legacy_eligible,
         "emissions_success": False,
         "pre_routing_quality_status": "not_evaluated",
     }
@@ -199,6 +207,7 @@ def _ledger_row(user_id, trip_id, physical_trip_id, context, **updates):
         "route_success": False,
         "final_mode": None,
         "classification_success": False,
+        "modal_usable": False,
         "route_component_count": 0,
         "failed_row_count": 0,
         "failed_row_fraction": 0.0,
@@ -215,6 +224,7 @@ def _ledger_row(user_id, trip_id, physical_trip_id, context, **updates):
         "route_coverage_fraction": 0.0,
         "route_completeness_status": None,
         "emissions_eligible": False,
+        "emissions_usable": False,
         "emissions_success": False,
     }
     row.update(updates)
@@ -293,8 +303,10 @@ def process_user_day(user_id: object, day_frame: pd.DataFrame, resources: dict[s
         physical_trip_id = _trip_identifier(user_id, trip_id, trip)
         context = TripServingContext.from_trip(trip, raw_ping_count=raw_count)
         base = _ledger_row(user_id, trip_id, physical_trip_id, context)
-        if (context.effective_ping_count < MIN_EFFECTIVE_PINGS or
-                context.pct_pings_conserved < MIN_PCT_CONSERVED):
+        min_pings = getattr(random_forest_contract, "MIN_EFFECTIVE_PINGS", MIN_EFFECTIVE_PINGS)
+        min_pct = getattr(random_forest_contract, "MIN_PCT_CONSERVED", MIN_PCT_CONSERVED)
+        if (context.effective_ping_count < min_pings or
+                context.pct_pings_conserved < min_pct):
             base.update(
                 processing_status="quality_rejected", failure_reason="quality_guardrail",
                 pre_routing_quality_status="rejected",
@@ -358,13 +370,26 @@ def process_user_day(user_id: object, day_frame: pd.DataFrame, resources: dict[s
         best_route = attach_route_quality(best_route, quality)
         routed.append(best_route)
         base.update(quality)
-        base.update(route_success=True, final_mode=final_mode, classification_success=True)
-        if quality["emissions_eligible"]:
-            base.update(processing_status="emissions_pending")
+        
+        modal_usable = bool(final_mode not in {None, "Calidad insuficiente"})
+        emissions_usable = is_strict_emissions_usable(final_mode, modal_usable, quality)
+        
+        base.update(
+            route_success=True,
+            final_mode=final_mode,
+            classification_success=modal_usable,
+            modal_usable=modal_usable,
+            emissions_usable=emissions_usable,
+        )
+        if emissions_usable:
+            base.update(processing_status="emissions_pending", failure_reason=None)
+        elif final_mode in {"Caminar", "Metro"}:
+            base.update(processing_status="success", failure_reason=None, emissions_success=False)
         else:
             base.update(
-                processing_status="routing_failed",
+                processing_status="success",
                 failure_reason="post_routing_quality_failed",
+                emissions_success=False,
             )
         ledger.append(base)
     return DayProcessingResult(
@@ -549,7 +574,7 @@ def run_pipeline_v4(
 
     emission_error = None
     eligible_ids = set(
-        ledger.loc[ledger["emissions_eligible"].fillna(False).astype(bool), "physical_trip_id"]
+        ledger.loc[ledger["emissions_usable"].fillna(False).astype(bool), "physical_trip_id"]
         .dropna().astype(str)
     ) if not ledger.empty else set()
     if not routes.empty and eligible_ids:
@@ -558,6 +583,7 @@ def run_pipeline_v4(
         ).fillna(True).astype(bool)
         emission_routes = routes[
             routes.get("physical_trip_id", pd.Series(None, index=routes.index)).astype(str).isin(eligible_ids)
+            & routes.get("modo_transporte", pd.Series(None, index=routes.index)).astype(str).isin(["Carro", "Bus"])
             & valid_geometry
         ].copy()
     else:
@@ -567,27 +593,27 @@ def run_pipeline_v4(
             print("[Pipeline] Calculating emissions for eligible route segments...", flush=True)
         emissions = (
             calculate_emissions(emission_routes, config.FILE_MOVES)
-            if not emission_routes.empty else emission_routes.copy()
+            if not emission_routes.empty else pd.DataFrame()
         )
     except Exception as exc:
         emissions = pd.DataFrame()
         emission_error = f"{type(exc).__name__}: {exc}"
     if not ledger.empty:
         classified = ledger["classification_success"].astype(bool)
-        eligible = ledger["emissions_eligible"].fillna(False).astype(bool)
+        emissions_eligible = ledger["emissions_usable"].fillna(False).astype(bool)
         if emission_error is None:
             emitted_ids = (
                 set(emissions["physical_trip_id"].dropna().astype(str))
-                if "physical_trip_id" in emissions else set(routes.get("physical_trip_id", []))
+                if "physical_trip_id" in emissions and not emissions.empty else set()
             )
-            emitted = ledger["physical_trip_id"].astype(str).isin(emitted_ids) & classified & eligible
+            emitted = ledger["physical_trip_id"].astype(str).isin(emitted_ids) & classified & emissions_eligible
             ledger.loc[emitted, ["processing_status", "emissions_success"]] = ["success", True]
-            missing_emissions = classified & eligible & ~emitted
+            missing_emissions = classified & emissions_eligible & ~emitted
             ledger.loc[missing_emissions, "processing_status"] = "emissions_failed"
             ledger.loc[missing_emissions, "failure_reason"] = "no_emission_output_for_trip"
         else:
-            ledger.loc[classified & eligible, "processing_status"] = "emissions_failed"
-            ledger.loc[classified & eligible, "failure_reason"] = emission_error
+            ledger.loc[classified & emissions_eligible, "processing_status"] = "emissions_failed"
+            ledger.loc[classified & emissions_eligible, "failure_reason"] = emission_error
 
     if metadata is not None and not routes.empty:
         routes = attach_user_metadata(routes, metadata)
