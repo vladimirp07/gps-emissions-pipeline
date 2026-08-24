@@ -83,6 +83,11 @@ visual_content/
 /local_reports/
 /docs_private/
 /local_notes/
+/*_AUDIT.md
+/*_REVIEW.md
+/*_REPORT.md
+/*_VALIDATION.md
+/*_APPROVAL.md
 /PRODUCTION_GITHUB_PUSH_REVIEW.md
 /PUBLIC_REPOSITORY_CLEANUP_REVIEW.md
 /V4_PRIVATE_INPUT_BUNDLE_REVIEW.md
