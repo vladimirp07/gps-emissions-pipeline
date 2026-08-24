@@ -8,10 +8,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import hashlib
 import json
+import os
 from pathlib import Path
 import pickle
 from typing import Any
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import geopandas as gpd
 from joblib import Parallel, delayed
@@ -37,6 +40,9 @@ from pipeline_v4.src.output_schema import (
     project_summary,
     validate_output_mode,
     write_output_artifact,
+    write_parquet_atomic,
+    write_detailed_output_streaming,
+    write_summary_output_streaming,
 )
 from pipeline_v4.src import random_forest_contract
 from pipeline_v4.src.random_forest_contract import MIN_EFFECTIVE_PINGS, MIN_PCT_CONSERVED
@@ -304,7 +310,7 @@ def process_user_day(user_id: object, day_frame: pd.DataFrame, resources: dict[s
         context = TripServingContext.from_trip(trip, raw_ping_count=raw_count)
         base = _ledger_row(user_id, trip_id, physical_trip_id, context)
         min_pings = getattr(random_forest_contract, "MIN_EFFECTIVE_PINGS", MIN_EFFECTIVE_PINGS)
-        min_pct = getattr(random_forest_contract, "MIN_PCT_CONSERVED", MIN_PCT_CONSERVED)
+        min_pct = 100.0 * getattr(random_forest_contract, "MIN_PCT_CONSERVED", MIN_PCT_CONSERVED)
         if (context.effective_ping_count < min_pings or
                 context.pct_pings_conserved < min_pct):
             base.update(
@@ -379,6 +385,7 @@ def process_user_day(user_id: object, day_frame: pd.DataFrame, resources: dict[s
             final_mode=final_mode,
             classification_success=modal_usable,
             modal_usable=modal_usable,
+            emissions_eligible=emissions_usable,
             emissions_usable=emissions_usable,
         )
         if emissions_usable:
@@ -415,6 +422,30 @@ def _read_frame(value: pd.DataFrame | str | Path, columns: list[str] | None = No
     return pd.read_parquet(value)
 
 
+# -----------------------------------------------------------------------------
+# PROCESS POOL WORKER LIFECYCLE (SAFE PROCESS TEST MODE)
+# -----------------------------------------------------------------------------
+_GLOBAL_PROCESS_WORKER_RESOURCES = None
+
+
+def _init_process_worker():
+    """Initializer for ProcessPool workers: loads routing resources once per worker process."""
+    global _GLOBAL_PROCESS_WORKER_RESOURCES
+    # Limit inner BLAS/OpenMP threads to 1 per worker process to prevent thread oversubscription
+    for var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+        os.environ[var] = "1"
+    _GLOBAL_PROCESS_WORKER_RESOURCES = load_pipeline_resources()
+    _GLOBAL_PROCESS_WORKER_RESOURCES["modal_evaluator"] = create_modal_evaluator(config.MODAL_CLASSIFIER)
+
+
+def _process_user_day_process_worker(task_index, user_id, day_frame):
+    """Executes process_user_day using pre-loaded worker process resources."""
+    global _GLOBAL_PROCESS_WORKER_RESOURCES
+    if _GLOBAL_PROCESS_WORKER_RESOURCES is None:
+        _init_process_worker()
+    return task_index, process_user_day(user_id, day_frame, _GLOBAL_PROCESS_WORKER_RESOURCES)
+
+
 def _process_indexed_user_day(task_index, user_id, day, loaded_resources):
     """Preserve task order after collecting asynchronously completed work."""
     return task_index, process_user_day(user_id, day, loaded_resources)
@@ -424,9 +455,37 @@ def _run_user_day_tasks(
     tasks,
     loaded_resources,
     n_jobs: int,
+    backend: str = "threading",
     progress: Any = None,
+    process_executor: Any = None,
 ):
     """Run one bounded task window with deterministic output order."""
+    if backend == "process":
+        if process_executor is not None:
+            futures = [
+                process_executor.submit(_process_user_day_process_worker, task_index, user_id, day_frame)
+                for task_index, user_id, day_frame in tasks
+            ]
+            completed = []
+            for fut in as_completed(futures):
+                completed.append(fut.result())
+                if progress is not None and hasattr(progress, "update"):
+                    progress.update(1)
+            return [result for _, result in sorted(completed, key=lambda item: item[0])]
+        else:
+            with ProcessPoolExecutor(max_workers=n_jobs, initializer=_init_process_worker) as executor:
+                futures = [
+                    executor.submit(_process_user_day_process_worker, task_index, user_id, day_frame)
+                    for task_index, user_id, day_frame in tasks
+                ]
+                completed = []
+                for fut in as_completed(futures):
+                    completed.append(fut.result())
+                    if progress is not None and hasattr(progress, "update"):
+                        progress.update(1)
+                return [result for _, result in sorted(completed, key=lambda item: item[0])]
+
+    # Threading backend (default safe mode)
     parallel = Parallel(n_jobs=n_jobs, backend="threading", return_as="generator_unordered")
     task_results = parallel(
         delayed(_process_indexed_user_day)(task_index, user_id, day_frame, loaded_resources)
@@ -452,12 +511,114 @@ def _run_user_day_tasks(
     return [result for _, result in sorted(completed, key=lambda item: item[0])]
 
 
+def _validate_parquet_checkpoint(path: Path, min_rows: int = 0, required_columns: list[str] | None = None) -> bool:
+    """Safely verify that a parquet checkpoint exists, is non-empty, and readable."""
+    if not path.exists():
+        return False
+    try:
+        if path.stat().st_size == 0:
+            return False
+        import pyarrow.parquet as pq
+        schema = pq.read_schema(path)
+        if required_columns:
+            for col in required_columns:
+                if col not in schema.names:
+                    return False
+        meta = pq.read_metadata(path)
+        if meta.num_rows < min_rows:
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def _data_identity(value: pd.DataFrame | str | Path | None) -> dict | None:
+    """Return a stable, bounded-memory identity for checkpoint compatibility."""
+    if value is None:
+        return None
+    if isinstance(value, (str, Path)):
+        path = Path(value).resolve()
+        stat = path.stat()
+        return {
+            "kind": "file", "path": str(path), "size": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+        }
+    digest = hashlib.sha256()
+    digest.update(json.dumps(
+        [(str(column), str(dtype)) for column, dtype in value.dtypes.items()],
+        separators=(",", ":"),
+    ).encode("utf-8"))
+    for start in range(0, len(value), 100_000):
+        hashed = pd.util.hash_pandas_object(
+            value.iloc[start:start + 100_000], index=False, categorize=True,
+        )
+        digest.update(hashed.to_numpy().tobytes())
+    return {
+        "kind": "dataframe", "rows": len(value), "columns": list(map(str, value.columns)),
+        "sha256": digest.hexdigest(),
+    }
+
+
+def _path_identity(path: str | Path) -> dict:
+    resolved = Path(path).resolve()
+    if not resolved.is_file():
+        return {"path": str(resolved), "missing": True}
+    stat = resolved.stat()
+    return {"path": str(resolved), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+
+
+def _checkpoint_contract(
+    preprocessed_gps, user_metadata, limit_users, limit_days_per_user, resources,
+) -> tuple[dict, dict]:
+    artifact = config.FILE_MODAL_HYBRID if config.MODAL_CLASSIFIER == "hybrid" else config.FILE_MODAL_RANDOM_FOREST
+    artifact_identity = _path_identity(artifact)
+    if Path(artifact).is_file():
+        artifact_identity["sha256"] = hashlib.sha256(Path(artifact).read_bytes()).hexdigest()
+    routing = {
+        "input": _data_identity(preprocessed_gps),
+        "metadata": _data_identity(user_metadata),
+        "limit_users": limit_users,
+        "limit_days_per_user": limit_days_per_user,
+        "classifier": config.MODAL_CLASSIFIER,
+        "classifier_artifact": artifact_identity,
+        "min_effective_pings": random_forest_contract.MIN_EFFECTIVE_PINGS,
+        "min_pct_conserved": random_forest_contract.MIN_PCT_CONSERVED,
+        "metro_threshold": random_forest_contract.METRO_PROBABILITY_THRESHOLD,
+        "bus_threshold": random_forest_contract.BUS_PROBABILITY_THRESHOLD,
+        "router_version": config.ROUTER_VERSION,
+        "max_lookahead_skipped_pings": config.MAX_LOOKAHEAD_SKIPPED_PINGS,
+        # Custom in-memory graph resources are safe to resume only in the same process.
+        "resources": "configured_files" if resources is None else f"in_memory:{id(resources)}",
+    }
+    emissions = {"routing": routing, "moves_rates": _path_identity(config.FILE_MOVES)}
+    return routing, emissions
+
+
+def _marker_matches(path: Path, contract: dict) -> bool:
+    try:
+        marker = json.loads(path.read_text(encoding="utf-8"))
+        return marker.get("contract") == contract
+    except Exception:
+        return False
+
+
+def _write_json_atomic(path: Path, payload: dict) -> None:
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    try:
+        tmp_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+        os.replace(tmp_path, path)
+    except Exception:
+        if tmp_path.exists():
+            tmp_path.unlink()
+        raise
+
+
 def run_pipeline_v4(
     preprocessed_gps: pd.DataFrame | str | Path,
     output_dir: str | Path,
     user_metadata: pd.DataFrame | str | Path | None = None,
     *,
-    n_jobs: int = 2,
+    n_jobs: int | None = None,
     limit_users: int | None = None,
     limit_days_per_user: int | None = None,
     resources: dict[str, Any] | None = None,
@@ -465,186 +626,361 @@ def run_pipeline_v4(
     reuse_modal_evaluator: bool = True,
     show_progress: bool = True,
     user_day_batch_size: int | None = None,
+    resume: bool = True,
+    execution_profile: str | None = None,
+    n_jobs_override: int | None = None,
+    backend_override: str | None = None,
+    batch_size_override: int | None = None,
+    backend: str | None = None,
 ) -> PipelineV4Result:
     """Produce routes, individual emissions, and the canonical trip ledger."""
+    # Resolve execution profile with strict priority: override > profile default > safe fallback
+    profile_info = config.resolve_execution_profile(
+        execution_profile,
+        n_jobs_override=n_jobs_override if n_jobs_override is not None else n_jobs,
+        backend_override=backend_override or backend,
+        batch_size_override=batch_size_override if batch_size_override is not None else user_day_batch_size,
+    )
+    effective_n_jobs = profile_info["effective_n_jobs"]
+    effective_backend = profile_info["backend"]
+    effective_batch_size = profile_info["user_day_batch_size"]
+    if effective_backend == "process" and resources is not None:
+        raise ValueError(
+            "Process execution cannot accept caller-provided in-memory resources; "
+            "workers must load the configured production resources consistently."
+        )
+
+    print(f"[Pipeline] Execution profile: {profile_info['execution_profile']}", flush=True)
+    print(f"[Pipeline] Parallel backend: {effective_backend}", flush=True)
+    print(f"[Pipeline] Requested workers: {profile_info['requested_n_jobs']}", flush=True)
+    print(f"[Pipeline] Effective workers: {effective_n_jobs}", flush=True)
+    print(f"[Pipeline] User-day batch size: {effective_batch_size}", flush=True)
+    if profile_info.get("guardrail_warning"):
+        print(f"[Pipeline] WARNING: {profile_info['guardrail_warning']}", flush=True)
+
     output_mode = validate_output_mode(output_mode)
-    print("[Pipeline] Loading preprocessed GPS...", flush=True)
-    gps_cols = [
-        "caid", "user_id", "local_timestamp", "latitude", "longitude",
-        "lat_ruteo", "lon_ruteo", "Speed [km/h]", "dis lineal [m]", "trip", "travel time",
-    ]
-    gps = _read_frame(preprocessed_gps, columns=gps_cols)
-    required = {"caid", "local_timestamp", "latitude", "longitude"}
-    missing = sorted(required - set(gps.columns))
-    if missing:
-        raise ValueError(f"Preprocessed GPS is missing columns: {missing}")
-    gps["local_timestamp"] = pd.to_datetime(gps.local_timestamp, errors="coerce")
-    if gps.local_timestamp.isna().any():
-        raise ValueError("Preprocessed GPS contains invalid local_timestamp values")
-    gps["date"] = gps.local_timestamp.dt.date
-    metadata = None if user_metadata is None else _read_frame(user_metadata)
-    if metadata is not None:
-        if "routing_eligible" in metadata.columns:
-            eligible = metadata["routing_eligible"].fillna(False).astype(bool)
-        else:
-            # Backward-compatible handoff for metadata produced before routing
-            # and residence quality were explicitly decoupled.
-            eligible = metadata.processing_status.eq("ready_for_pipeline")
-        ready = metadata.loc[eligible, "user_id"]
-        gps = gps[gps.caid.isin(ready)].copy()
-    print(
-        f"[Pipeline] Loaded {len(gps):,} rows for {gps.caid.nunique():,} ready user(s).",
-        flush=True,
-    )
-    users = gps.caid.drop_duplicates().tolist()
-    if limit_users is not None:
-        users = users[:limit_users]
-    # Keep only deterministic task specifications (user/day and source row
-    # positions). Materialize task DataFrames only for the active window.
-    group_indices = gps.groupby(["caid", "date"], sort=False, observed=True).indices
-    task_specs = []
-    for user_id in users:
-        days = sorted(gps.loc[gps.caid.eq(user_id), "date"].unique())
-        if limit_days_per_user is not None:
-            days = days[:limit_days_per_user]
-        task_specs.extend((user_id, day) for day in days)
-    print(
-        f"[Pipeline] Identified {len(task_specs)} user-day task(s) for {len(users)} user(s).",
-        flush=True,
-    )
-    print("[Pipeline] Loading routing resources...", flush=True)
-    loaded_resources = dict(resources or load_pipeline_resources())
-    print("[Pipeline] Routing resources loaded.", flush=True)
-    if reuse_modal_evaluator and "modal_evaluator" not in loaded_resources:
-        # The serving evaluator is read-only during inference. Loading it once
-        # per run removes repeated model deserialization without changing calls.
-        loaded_resources["modal_evaluator"] = create_modal_evaluator(config.MODAL_CLASSIFIER)
-    print("[Pipeline] Classifier resources loaded.", flush=True)
-    batch_size = int(config.USER_DAY_BATCH_SIZE if user_day_batch_size is None else user_day_batch_size)
-    if batch_size <= 0:
-        raise ValueError("user_day_batch_size must be a positive integer")
-    batch_count = (len(task_specs) + batch_size - 1) // batch_size
-    total_user_days = len(task_specs)
-    print(
-        f"[Pipeline] Processing {len(task_specs)} user-day task(s) in {batch_count} batch(es) "
-        f"of at most {batch_size} with {n_jobs} worker(s)...",
-        flush=True,
-    )
-    route_frames, ledger_frames = [], []
-    progress_bar = (
-        tqdm(
-            total=total_user_days,
-            desc="Processing user-days",
-            unit="task",
-            dynamic_ncols=True,
-        )
-        if show_progress and total_user_days > 0
-        else None
-    )
-    try:
-        for batch_number, start in enumerate(range(0, len(task_specs), batch_size), start=1):
-            window_specs = task_specs[start:start + batch_size]
-            window_tasks = [
-                (start + offset, user_id, gps.iloc[group_indices[(user_id, day)]].copy())
-                for offset, (user_id, day) in enumerate(window_specs)
-            ]
-            window_results = _run_user_day_tasks(
-                window_tasks, loaded_resources, n_jobs, progress=progress_bar
-            )
-            route_frames.extend(result.routes for result in window_results if not result.routes.empty)
-            ledger_frames.extend(result.trip_ledger for result in window_results if not result.trip_ledger.empty)
-            del window_results, window_tasks, window_specs
-    finally:
-        if progress_bar is not None:
-            progress_bar.close()
-    del task_specs, group_indices
-    print("[Pipeline] Routing and modal inference complete.", flush=True)
-    routes = pd.concat(route_frames, ignore_index=True) if route_frames else pd.DataFrame()
-    ledger = _ensure_ledger_schema(
-        pd.concat(ledger_frames, ignore_index=True) if ledger_frames else _empty_ledger()
-    )
-    if not ledger.empty and ledger["physical_trip_id"].duplicated().any():
-        duplicated = ledger.loc[ledger["physical_trip_id"].duplicated(), "physical_trip_id"].tolist()
-        raise RuntimeError(f"Trip ledger contains duplicate physical trips: {duplicated[:5]}")
-    for column in ("start_node", "end_node", "osmid", "highway"):
-        if column in routes.columns:
-            routes[column] = routes[column].astype(str)
-    if not routes.empty:
-        routes["_output_row_id"] = range(len(routes))
-
-    emission_error = None
-    eligible_ids = set(
-        ledger.loc[ledger["emissions_usable"].fillna(False).astype(bool), "physical_trip_id"]
-        .dropna().astype(str)
-    ) if not ledger.empty else set()
-    if not routes.empty and eligible_ids:
-        valid_geometry = ~routes.get(
-            "ruteo_fallido", pd.Series(False, index=routes.index)
-        ).fillna(True).astype(bool)
-        emission_routes = routes[
-            routes.get("physical_trip_id", pd.Series(None, index=routes.index)).astype(str).isin(eligible_ids)
-            & routes.get("modo_transporte", pd.Series(None, index=routes.index)).astype(str).isin(["Carro", "Bus"])
-            & valid_geometry
-        ].copy()
-    else:
-        emission_routes = pd.DataFrame(columns=routes.columns)
-    try:
-        if not emission_routes.empty:
-            print("[Pipeline] Calculating emissions for eligible route segments...", flush=True)
-        emissions = (
-            calculate_emissions(emission_routes, config.FILE_MOVES)
-            if not emission_routes.empty else pd.DataFrame()
-        )
-    except Exception as exc:
-        emissions = pd.DataFrame()
-        emission_error = f"{type(exc).__name__}: {exc}"
-    if not ledger.empty:
-        classified = ledger["classification_success"].astype(bool)
-        emissions_eligible = ledger["emissions_usable"].fillna(False).astype(bool)
-        if emission_error is None:
-            emitted_ids = (
-                set(emissions["physical_trip_id"].dropna().astype(str))
-                if "physical_trip_id" in emissions and not emissions.empty else set()
-            )
-            emitted = ledger["physical_trip_id"].astype(str).isin(emitted_ids) & classified & emissions_eligible
-            ledger.loc[emitted, ["processing_status", "emissions_success"]] = ["success", True]
-            missing_emissions = classified & emissions_eligible & ~emitted
-            ledger.loc[missing_emissions, "processing_status"] = "emissions_failed"
-            ledger.loc[missing_emissions, "failure_reason"] = "no_emission_output_for_trip"
-        else:
-            ledger.loc[classified & emissions_eligible, "processing_status"] = "emissions_failed"
-            ledger.loc[classified & emissions_eligible, "failure_reason"] = emission_error
-
-    if metadata is not None and not routes.empty:
-        routes = attach_user_metadata(routes, metadata)
-        if not emissions.empty:
-            emissions = attach_user_metadata(emissions, metadata)
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
+    checkpoints_dir = output / "checkpoints"
+    stages_dir = output / "stages"
+    checkpoints_dir.mkdir(parents=True, exist_ok=True)
+    stages_dir.mkdir(parents=True, exist_ok=True)
+
+    stage_routing_marker = stages_dir / "stage_routing_modal.done"
+    stage_emissions_marker = stages_dir / "stage_emissions.done"
+    routes_ckpt_path = checkpoints_dir / "routed_trajectories.parquet"
+    emissions_ckpt_path = checkpoints_dir / "emissions_results.parquet"
+    ledger_ckpt_path = output / "trip_ledger.parquet"
+
+    routing_contract, emissions_contract = _checkpoint_contract(
+        preprocessed_gps, user_metadata, limit_users, limit_days_per_user, resources,
+    )
+
+    metadata = None if user_metadata is None else _read_frame(user_metadata)
+    total_user_days = 0
+    users_received_count = 0
+
+    # -------------------------------------------------------------------------
+    # STAGE 1: ROUTING AND MODAL INFERENCE (OR RESUME FROM CHECKPOINT)
+    # -------------------------------------------------------------------------
+    can_resume_routing = (
+        resume
+        and stage_routing_marker.exists()
+        and _marker_matches(stage_routing_marker, routing_contract)
+        and _validate_parquet_checkpoint(routes_ckpt_path, min_rows=0, required_columns=["modo_transporte"])
+        and _validate_parquet_checkpoint(ledger_ckpt_path, min_rows=0, required_columns=["physical_trip_id", "processing_status"])
+    )
+
+    if can_resume_routing:
+        print("[Pipeline] Resuming from checkpoint: Routing & modal inference already complete.", flush=True)
+        routes = pd.read_parquet(routes_ckpt_path)
+        ledger = _ensure_ledger_schema(pd.read_parquet(ledger_ckpt_path))
+        try:
+            r_meta = json.loads(stage_routing_marker.read_text(encoding="utf-8"))
+            total_user_days = r_meta.get("user_days", 0)
+            users_received_count = r_meta.get("users_received", 0)
+        except Exception:
+            pass
+        batch_size = effective_batch_size
+    else:
+        print("[Pipeline] Loading preprocessed GPS...", flush=True)
+        gps_cols = [
+            "caid", "user_id", "local_timestamp", "latitude", "longitude",
+            "lat_ruteo", "lon_ruteo", "Speed [km/h]", "dis lineal [m]", "trip", "travel time",
+        ]
+        gps = _read_frame(preprocessed_gps, columns=gps_cols)
+        required = {"caid", "local_timestamp", "latitude", "longitude"}
+        missing = sorted(required - set(gps.columns))
+        if missing:
+            raise ValueError(f"Preprocessed GPS is missing columns: {missing}")
+        gps["local_timestamp"] = pd.to_datetime(gps.local_timestamp, errors="coerce")
+        if gps.local_timestamp.isna().any():
+            raise ValueError("Preprocessed GPS contains invalid local_timestamp values")
+        gps["date"] = gps.local_timestamp.dt.date
+        if metadata is not None:
+            if "routing_eligible" in metadata.columns:
+                eligible = metadata["routing_eligible"].fillna(False).astype(bool)
+            else:
+                eligible = metadata.processing_status.eq("ready_for_pipeline")
+            ready = metadata.loc[eligible, "user_id"]
+            gps = gps[gps.caid.isin(ready)].copy()
+        users_received_count = int(gps.caid.nunique())
+        print(
+            f"[Pipeline] Loaded {len(gps):,} rows for {users_received_count:,} ready user(s).",
+            flush=True,
+        )
+        users = gps.caid.drop_duplicates().tolist()
+        if limit_users is not None:
+            users = users[:limit_users]
+        group_indices = gps.groupby(["caid", "date"], sort=False, observed=True).indices
+        task_specs = []
+        for user_id in users:
+            days = sorted(gps.loc[gps.caid.eq(user_id), "date"].unique())
+            if limit_days_per_user is not None:
+                days = days[:limit_days_per_user]
+            task_specs.extend((user_id, day) for day in days)
+        total_user_days = len(task_specs)
+        print(
+            f"[Pipeline] Identified {total_user_days} user-day task(s) for {len(users)} user(s).",
+            flush=True,
+        )
+
+        loaded_resources = None
+        if effective_backend != "process":
+            print("[Pipeline] Loading routing resources in parent process...", flush=True)
+            loaded_resources = dict(resources or load_pipeline_resources())
+            print("[Pipeline] Routing resources loaded.", flush=True)
+            if reuse_modal_evaluator and "modal_evaluator" not in loaded_resources:
+                loaded_resources["modal_evaluator"] = create_modal_evaluator(config.MODAL_CLASSIFIER)
+            print("[Pipeline] Classifier resources loaded.", flush=True)
+
+        batch_size = effective_batch_size
+        if batch_size <= 0:
+            raise ValueError("user_day_batch_size must be a positive integer")
+        batch_count = (total_user_days + batch_size - 1) // batch_size
+        print(
+            f"[Pipeline] Processing {total_user_days} user-day task(s) in {batch_count} batch(es) "
+            f"of at most {batch_size} with {effective_n_jobs} worker(s) ({effective_backend} backend)...",
+            flush=True,
+        )
+        route_frames, ledger_frames = [], []
+        progress_bar = (
+            tqdm(
+                total=total_user_days,
+                desc="Processing user-days",
+                unit="task",
+                dynamic_ncols=True,
+            )
+            if show_progress and total_user_days > 0
+            else None
+        )
+        try:
+            if effective_backend == "process":
+                print(f"[Pipeline] Starting persistent ProcessPoolExecutor with {effective_n_jobs} worker(s)...", flush=True)
+                with ProcessPoolExecutor(max_workers=effective_n_jobs, initializer=_init_process_worker) as proc_executor:
+                    for batch_number, start in enumerate(range(0, len(task_specs), batch_size), start=1):
+                        window_specs = task_specs[start:start + batch_size]
+                        window_tasks = [
+                            (start + offset, user_id, gps.iloc[group_indices[(user_id, day)]].copy())
+                            for offset, (user_id, day) in enumerate(window_specs)
+                        ]
+                        window_results = _run_user_day_tasks(
+                            window_tasks, None, effective_n_jobs, backend="process",
+                            progress=progress_bar, process_executor=proc_executor,
+                        )
+                        route_frames.extend(result.routes for result in window_results if not result.routes.empty)
+                        ledger_frames.extend(result.trip_ledger for result in window_results if not result.trip_ledger.empty)
+                        del window_results, window_tasks, window_specs
+            else:
+                for batch_number, start in enumerate(range(0, len(task_specs), batch_size), start=1):
+                    window_specs = task_specs[start:start + batch_size]
+                    window_tasks = [
+                        (start + offset, user_id, gps.iloc[group_indices[(user_id, day)]].copy())
+                        for offset, (user_id, day) in enumerate(window_specs)
+                    ]
+                    window_results = _run_user_day_tasks(
+                        window_tasks, loaded_resources, effective_n_jobs, backend="threading",
+                        progress=progress_bar,
+                    )
+                    route_frames.extend(result.routes for result in window_results if not result.routes.empty)
+                    ledger_frames.extend(result.trip_ledger for result in window_results if not result.trip_ledger.empty)
+                    del window_results, window_tasks, window_specs
+        finally:
+            if progress_bar is not None:
+                progress_bar.close()
+        del task_specs, group_indices, gps
+        print("[Pipeline] Routing and modal inference complete.", flush=True)
+        routes = pd.concat(route_frames, ignore_index=True) if route_frames else pd.DataFrame()
+        ledger = _ensure_ledger_schema(
+            pd.concat(ledger_frames, ignore_index=True) if ledger_frames else _empty_ledger()
+        )
+        del route_frames, ledger_frames
+        if not ledger.empty and ledger["physical_trip_id"].duplicated().any():
+            duplicated = ledger.loc[ledger["physical_trip_id"].duplicated(), "physical_trip_id"].tolist()
+            raise RuntimeError(f"Trip ledger contains duplicate physical trips: {duplicated[:5]}")
+        for column in ("start_node", "end_node", "osmid", "highway"):
+            if column in routes.columns:
+                routes[column] = routes[column].astype(str)
+        if not routes.empty:
+            routes["_output_row_id"] = range(len(routes))
+        else:
+            routes = pd.DataFrame(columns=["physical_trip_id", "modo_transporte", "_output_row_id"])
+        if metadata is not None and not routes.empty:
+            routes = attach_user_metadata(routes, metadata)
+
+        # Checkpoint Stage 1 immediately
+        write_parquet_atomic(routes, routes_ckpt_path)
+        write_parquet_atomic(project_ledger(ledger), ledger_ckpt_path)
+        _write_json_atomic(
+            stage_routing_marker, {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "route_rows": len(routes),
+                "trips": len(ledger),
+                "user_days": total_user_days,
+                "users_received": users_received_count,
+                "contract": routing_contract,
+            },
+        )
+        print(f"[Pipeline] Checkpointed Stage 1: {len(routes):,} route rows, {len(ledger):,} trips.", flush=True)
+
+    # -------------------------------------------------------------------------
+    # STAGE 2: EMISSIONS CALCULATION (OR RESUME FROM CHECKPOINT)
+    # -------------------------------------------------------------------------
+    can_resume_emissions = (
+        resume
+        and can_resume_routing
+        and stage_emissions_marker.exists()
+        and _marker_matches(stage_emissions_marker, emissions_contract)
+        and _validate_parquet_checkpoint(emissions_ckpt_path, min_rows=0, required_columns=["physical_trip_id"])
+    )
+
+    emission_error = None
+    if can_resume_emissions:
+        print("[Pipeline] Resuming from checkpoint: Emissions calculation already complete.", flush=True)
+        emissions = pd.read_parquet(emissions_ckpt_path)
+        ledger = _ensure_ledger_schema(pd.read_parquet(ledger_ckpt_path))
+    else:
+        eligible_ids = set(
+            ledger.loc[ledger["emissions_usable"].fillna(False).astype(bool), "physical_trip_id"]
+            .dropna().astype(str)
+        ) if not ledger.empty else set()
+        if not routes.empty and eligible_ids:
+            valid_geometry = ~routes.get(
+                "ruteo_fallido", pd.Series(False, index=routes.index)
+            ).fillna(True).astype(bool)
+            emission_routes = routes[
+                routes.get("physical_trip_id", pd.Series(None, index=routes.index)).astype(str).isin(eligible_ids)
+                & routes.get("modo_transporte", pd.Series(None, index=routes.index)).astype(str).isin(["Carro", "Bus"])
+                & valid_geometry
+            ].copy()
+        else:
+            emission_routes = pd.DataFrame(columns=routes.columns)
+        try:
+            if not emission_routes.empty:
+                print("[Pipeline] Calculating emissions for eligible route segments...", flush=True)
+            emissions = (
+                calculate_emissions(emission_routes, config.FILE_MOVES)
+                if not emission_routes.empty else pd.DataFrame()
+            )
+        except Exception as exc:
+            emissions = pd.DataFrame()
+            emission_error = f"{type(exc).__name__}: {exc}"
+        del emission_routes
+
+        if emissions.empty and "physical_trip_id" not in emissions.columns:
+            emissions = pd.DataFrame(columns=["physical_trip_id", "_output_row_id"])
+
+        if not ledger.empty:
+            classified = ledger["classification_success"].astype(bool)
+            emissions_eligible = ledger["emissions_usable"].fillna(False).astype(bool)
+            if emission_error is None:
+                emitted_ids = (
+                    set(emissions["physical_trip_id"].dropna().astype(str))
+                    if "physical_trip_id" in emissions and not emissions.empty else set()
+                )
+                emitted = ledger["physical_trip_id"].astype(str).isin(emitted_ids) & classified & emissions_eligible
+                ledger.loc[emitted, ["processing_status", "emissions_success"]] = ["success", True]
+                missing_emissions = classified & emissions_eligible & ~emitted
+                ledger.loc[missing_emissions, "processing_status"] = "emissions_failed"
+                ledger.loc[missing_emissions, "failure_reason"] = "no_emission_output_for_trip"
+            else:
+                ledger.loc[classified & emissions_eligible, "processing_status"] = "emissions_failed"
+                ledger.loc[classified & emissions_eligible, "failure_reason"] = emission_error
+
+        if metadata is not None and not emissions.empty and "home_ageb" not in emissions.columns:
+            emissions = attach_user_metadata(emissions, metadata)
+
+        # Checkpoint Stage 2 immediately
+        write_parquet_atomic(emissions, emissions_ckpt_path)
+        write_parquet_atomic(project_ledger(ledger), ledger_ckpt_path)
+        _write_json_atomic(
+            stage_emissions_marker, {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "emission_rows": len(emissions),
+                "error": emission_error,
+                "contract": emissions_contract,
+            },
+        )
+        print(f"[Pipeline] Checkpointed Stage 2: {len(emissions):,} emission rows.", flush=True)
+
+    # -------------------------------------------------------------------------
+    # STAGE 3: STREAMING MEMORY-SAFE OUTPUT GENERATION & LEDGER PERSISTENCE
+    # -------------------------------------------------------------------------
     print(f"[Pipeline] Writing {output_mode} output(s) and trip ledger...", flush=True)
     canonical_ledger = project_ledger(ledger)
+    write_parquet_atomic(canonical_ledger, ledger_ckpt_path)
+
     output_artifacts = {
         "output_mode": output_mode,
         "summary_output": {"generated": False},
         "detailed_output": {"generated": False},
+        "trip_ledger": {
+            "generated": True,
+            "filename": ledger_ckpt_path.name,
+            "rows": int(len(canonical_ledger)),
+            "columns": int(len(canonical_ledger.columns)),
+            "size_mb": round(ledger_ckpt_path.stat().st_size / (1024 * 1024), 3) if ledger_ckpt_path.exists() else 0.0,
+        },
     }
+
+    detailed_error = None
     if output_mode in {"summary", "both"}:
-        output_artifacts["summary_output"] = write_output_artifact(
-            project_summary(emissions), output / "routes_emissions_summary.parquet"
+        print("[Pipeline] Generating summary output...", flush=True)
+        output_artifacts["summary_output"] = write_summary_output_streaming(
+            emissions, output / "routes_emissions_summary.parquet", chunk_size=50000,
+            show_progress=show_progress,
         )
     if output_mode in {"detailed", "both"}:
-        output_artifacts["detailed_output"] = write_output_artifact(
-            project_detailed(routes, emissions, canonical_ledger),
-            output / "routes_emissions_detailed.parquet"
-        )
-    output_artifacts["trip_ledger"] = write_output_artifact(
-        canonical_ledger, output / "trip_ledger.parquet"
-    )
+        print("[Pipeline] Streaming detailed output...", flush=True)
+        try:
+            output_artifacts["detailed_output"] = write_detailed_output_streaming(
+                routes, emissions, canonical_ledger, output / "routes_emissions_detailed.parquet", chunk_size=50000,
+                show_progress=show_progress,
+            )
+        except Exception as exc:
+            detailed_error = f"{type(exc).__name__}: {exc}"
+            output_artifacts["detailed_output"] = {
+                "generated": False,
+                "error": detailed_error,
+            }
+            print(f"[Pipeline] WARNING: Detailed output projection encountered an error: {detailed_error}", flush=True)
+
+    manifest_status = "completed"
+    if emission_error is not None:
+        manifest_status = "emissions_failed"
+    elif detailed_error is not None:
+        manifest_status = "scientific_computation_complete_detailed_failed"
+    elif int((canonical_ledger.processing_status != "success").sum()) > 0:
+        manifest_status = "completed_with_trip_failures"
+    output_artifacts["status"] = manifest_status
+
+    print("[Pipeline] Finalizing manifest...", flush=True)
     manifest = {
         "stage": "pipeline_v4", "pipeline_release": config.PIPELINE_RELEASE,
+        "status": manifest_status,
         "created_utc": datetime.now(timezone.utc).isoformat(), "classifier": config.MODAL_CLASSIFIER,
-        "users_received": int(gps.caid.nunique()), "user_days": total_user_days,
-        "trips": int(len(ledger)), "successful_trips": int(ledger.processing_status.eq("success").sum()),
+        "users_received": users_received_count, "user_days": total_user_days,
+        "trips": int(len(canonical_ledger)), "successful_trips": int(canonical_ledger.processing_status.eq("success").sum()),
         "route_rows": len(routes), "emission_rows": len(emissions),
         "limits": {
             "users": limit_users,
@@ -653,7 +989,17 @@ def run_pipeline_v4(
         },
         "output_mode": output_mode,
         **output_artifacts,
-        "moves_rate_unit_status": "pending_external_confirmation",
+        "execution": profile_info,
+        "classification": {
+            "artifact": routing_contract["classifier_artifact"],
+            "metro_threshold": random_forest_contract.METRO_PROBABILITY_THRESHOLD,
+            "bus_threshold": random_forest_contract.BUS_PROBABILITY_THRESHOLD,
+            "min_effective_pings": random_forest_contract.MIN_EFFECTIVE_PINGS,
+            "min_pct_pings_conserved": random_forest_contract.MIN_PCT_CONSERVED,
+            "min_pct_pings_conserved_percent": random_forest_contract.MIN_PCT_CONSERVED_PERCENT,
+        },
+        "moves_rate_unit_status": "confirmed",
+        "moves_distance_rate_unit": config.EMISSION_RATE_DISTANCE_UNIT,
     }
     (output / "pipeline_manifest.json").write_text(
         json.dumps(manifest, indent=2, default=str), encoding="utf-8"

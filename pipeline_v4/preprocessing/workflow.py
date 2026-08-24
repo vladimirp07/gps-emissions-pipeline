@@ -87,18 +87,35 @@ def supplied_user_ids(
     source_path: str | Path,
     config: PreprocessingConfig,
     user_ids: Collection[object] | None = None,
+    limit_users: int | None = None,
 ) -> pd.DataFrame:
     """Return every externally supplied user, without sampling or replacement."""
     source = Path(source_path)
-    columns = pq.ParquetFile(source).schema.names
+    parquet_file = pq.ParquetFile(source)
+    columns = parquet_file.schema.names
     if config.user_column not in columns:
         raise KeyError(f"Missing user column: {config.user_column}")
     if user_ids is None:
-        # ``unique`` preserves first appearance and the original scalar dtype.
-        selected = pd.read_parquet(source, columns=[config.user_column])[config.user_column].dropna().unique().tolist()
-        input_source = "all_users_in_supplied_dataset"
+        if limit_users is not None and limit_users > 0:
+            selected_dict = {}
+            for batch in parquet_file.iter_batches(batch_size=65536, columns=[config.user_column]):
+                for uid in batch.column(0).to_pylist():
+                    if uid is not None and uid not in selected_dict:
+                        selected_dict[uid] = None
+                        if len(selected_dict) >= limit_users:
+                            break
+                if len(selected_dict) >= limit_users:
+                    break
+            selected = list(selected_dict.keys())
+            input_source = "first_users_in_supplied_dataset"
+        else:
+            # ``unique`` preserves first appearance and the original scalar dtype.
+            selected = pd.read_parquet(source, columns=[config.user_column])[config.user_column].dropna().unique().tolist()
+            input_source = "all_users_in_supplied_dataset"
     else:
         selected = list(dict.fromkeys(user_ids))
+        if limit_users is not None:
+            selected = selected[:limit_users]
         input_source = "explicit_user_list"
     if not selected:
         raise ValueError("The supplied sample contains no user IDs")

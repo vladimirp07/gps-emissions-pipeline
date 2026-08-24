@@ -63,6 +63,8 @@ def test_summary_schema_is_canonical_english_and_matches_detailed(monkeypatch, t
     assert tuple(summary.columns) == SUMMARY_COLUMNS
     assert tuple(detailed.columns) == DETAILED_COLUMNS
     assert tuple(ledger.columns) == LEDGER_OUTPUT_COLUMNS
+    assert "physical_trip_id" in summary.columns
+    assert summary.loc[0, "physical_trip_id"] == "101_2026-01-01_1"
     expected_kepler_time = summary.loc[0, "local_timestamp"].strftime("%Y-%m-%d %H:%M:%S")
     assert summary.loc[0, "kepler_time"] == expected_kepler_time
     assert detailed.loc[0, "kepler_time"] == expected_kepler_time

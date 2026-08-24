@@ -48,6 +48,8 @@ legacy/
 /Outputs/calibration_cache/
 /Outputs/diagnostics/
 /Outputs/legacy/
+/Outputs/
+/Inputs.zip
 /Inputs/Preprocessed GPS Emissions Data for tests/
 /Inputs/Tier 1-3 Emissions Inventories Results/
 /Inputs/Supporting input data for bus routes/

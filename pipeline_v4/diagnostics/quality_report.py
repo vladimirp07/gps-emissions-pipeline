@@ -865,7 +865,10 @@ def _draw_horizontal_distribution(ax, data: pd.DataFrame, value: str, modes: lis
     if violin:
         usable = [(pos, mode, values) for pos, mode, values in zip(positions, modes, arrays) if len(values) >= 2]
         if usable:
-            parts = ax.violinplot([item[2] for item in usable], positions=[item[0] for item in usable], vert=False, showmedians=True, showextrema=False)
+            try:
+                parts = ax.violinplot([item[2] for item in usable], positions=[item[0] for item in usable], orientation="horizontal", showmedians=True, showextrema=False)
+            except TypeError:
+                parts = ax.violinplot([item[2] for item in usable], positions=[item[0] for item in usable], vert=False, showmedians=True, showextrema=False)
             for body, (_, mode, _) in zip(parts["bodies"], usable):
                 body.set_facecolor(MODE_COLORS.get(mode, "#7A7A7A"))
                 body.set_edgecolor("#4A4A4A")
@@ -875,13 +878,22 @@ def _draw_horizontal_distribution(ax, data: pd.DataFrame, value: str, modes: lis
     else:
         usable = [(pos, mode, values) for pos, mode, values in zip(positions, modes, arrays) if len(values)]
         if usable:
-            boxes = ax.boxplot(
-                [item[2] for item in usable], positions=[item[0] for item in usable], vert=False,
-                patch_artist=True, showfliers=False, showmeans=True,
-                meanprops={"marker": "D", "markerfacecolor": "white", "markeredgecolor": "#303030", "markersize": 6},
-                medianprops={"color": "#303030", "linewidth": 1.5},
-                whiskerprops={"color": "#555555"}, capprops={"color": "#555555"},
-            )
+            try:
+                boxes = ax.boxplot(
+                    [item[2] for item in usable], positions=[item[0] for item in usable], orientation="horizontal",
+                    patch_artist=True, showfliers=False, showmeans=True,
+                    meanprops={"marker": "D", "markerfacecolor": "white", "markeredgecolor": "#303030", "markersize": 6},
+                    medianprops={"color": "#303030", "linewidth": 1.5},
+                    whiskerprops={"color": "#555555"}, capprops={"color": "#555555"},
+                )
+            except TypeError:
+                boxes = ax.boxplot(
+                    [item[2] for item in usable], positions=[item[0] for item in usable], vert=False,
+                    patch_artist=True, showfliers=False, showmeans=True,
+                    meanprops={"marker": "D", "markerfacecolor": "white", "markeredgecolor": "#303030", "markersize": 6},
+                    medianprops={"color": "#303030", "linewidth": 1.5},
+                    whiskerprops={"color": "#555555"}, capprops={"color": "#555555"},
+                )
             for box, (_, mode, _) in zip(boxes["boxes"], usable):
                 box.set_facecolor(MODE_COLORS.get(mode, "#7A7A7A"))
                 box.set_alpha(0.78)

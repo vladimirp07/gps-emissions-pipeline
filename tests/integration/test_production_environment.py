@@ -25,3 +25,17 @@ def test_incompatible_production_environment_fails_clearly(
         validate_production_environment(
             python_version=python_version, sklearn_version=sklearn_version,
         )
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        ({"modal_classifier": "random_forest"}, "must be 'hybrid'"),
+        ({"classifier_hash": "0" * 64}, "SHA256 does not match"),
+    ],
+)
+def test_frozen_classifier_identity_fails_closed(kwargs, expected):
+    with pytest.raises(RuntimeError, match=expected):
+        validate_production_environment(
+            python_version=(3, 12), sklearn_version="1.5.2", **kwargs,
+        )

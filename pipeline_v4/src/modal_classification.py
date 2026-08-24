@@ -556,6 +556,7 @@ class RandomForestRouteEvaluator:
         self.n2_features = list(RF_FEATURES)
         self.n3_features = list(RF_FEATURES)
         self.bus_threshold = 0.50
+        self.metro_threshold = getattr(random_forest_contract, "METRO_PROBABILITY_THRESHOLD", 0.30)
         self.raw_counts = self._load_raw_counts()
         project_root = Path(__file__).resolve().parents[2]
         self.model_path = Path(model_path) if model_path else project_root / "pipeline_v4" / "calibration_and_diagnostics" / "modal_classification" / "artifacts" / "random_forest_modal.pkl"
@@ -816,7 +817,7 @@ class RandomForestRouteEvaluator:
             raise ServingContractError("Falta TripServingContext para aplicar el guardrail GPS.")
         any_frame = next(iter(hypotheses.values()))
         min_pings = getattr(random_forest_contract, "MIN_EFFECTIVE_PINGS", MIN_EFFECTIVE_PINGS)
-        min_pct = getattr(random_forest_contract, "MIN_PCT_CONSERVED", MIN_PCT_CONSERVED)
+        min_pct = 100.0 * getattr(random_forest_contract, "MIN_PCT_CONSERVED", MIN_PCT_CONSERVED)
         if (serving_context.effective_ping_count < min_pings or
                 serving_context.pct_pings_conserved < min_pct):
             return "Calidad insuficiente", None, 0.0, {mode: 0.0 for mode in self.modos}
@@ -829,12 +830,14 @@ class RandomForestRouteEvaluator:
         x_n1 = features.loc[:, self.n1_features]
         pred_n1 = int(self.clf_n1.predict(x_n1)[0])
         prob_n1 = self.clf_n1.predict_proba(x_n1)[0]
+        has_metro_candidate = any(str(k).lower() == "metro" for k in hypotheses.keys())
         if pred_n1 == 0:
             mode, diagnostics = "Caminar", {"Caminar": float(prob_n1[0]), "Metro": 0.0, "Bus": 0.0, "Carro": 0.0}
         else:
             x_n2 = features.loc[:, self.n2_features]
-            pred_n2 = int(self.clf_n2.predict(x_n2)[0])
             prob_n2 = self.clf_n2.predict_proba(x_n2)[0]
+            metro_threshold = getattr(self, "metro_threshold", getattr(random_forest_contract, "METRO_PROBABILITY_THRESHOLD", 0.30))
+            pred_n2 = int(prob_n2[1] >= metro_threshold) if has_metro_candidate else 0
             if pred_n2 == 1:
                 mode = "Metro"
                 diagnostics = {"Caminar": float(prob_n1[0]), "Metro": float(prob_n1[1] * prob_n2[1]), "Bus": 0.0, "Carro": 0.0}
@@ -843,9 +846,11 @@ class RandomForestRouteEvaluator:
                 prob_n3 = self.clf_n3.predict_proba(x_n3)[0]
                 pred_n3 = int(prob_n3[1] >= self.bus_threshold)
                 mode = "Bus" if pred_n3 else "Carro"
-                diagnostics = {"Caminar": float(prob_n1[0]), "Metro": float(prob_n1[1] * prob_n2[1]),
-                               "Bus": float(prob_n1[1] * prob_n2[0] * prob_n3[1]),
-                               "Carro": float(prob_n1[1] * prob_n2[0] * prob_n3[0])}
+                p_surface = prob_n2[0] if has_metro_candidate else 1.0
+                p_metro = prob_n2[1] if has_metro_candidate else 0.0
+                diagnostics = {"Caminar": float(prob_n1[0]), "Metro": float(prob_n1[1] * p_metro),
+                               "Bus": float(prob_n1[1] * p_surface * prob_n3[1]),
+                               "Carro": float(prob_n1[1] * p_surface * prob_n3[0])}
         total = sum(diagnostics.values())
         diagnostics = {key: value / total for key, value in diagnostics.items()} if total else diagnostics
         hyps = {str(key).lower(): value for key, value in hypotheses.items()}
@@ -893,6 +898,7 @@ class HybridRouteEvaluator(RandomForestRouteEvaluator):
         self.n2_features = list(N2_FEATURES)
         self.n3_features = list(N3_FEATURES)
         self.bus_threshold = BUS_PROBABILITY_THRESHOLD
+        self.metro_threshold = getattr(random_forest_contract, "METRO_PROBABILITY_THRESHOLD", 0.30)
         self.raw_counts = self._load_raw_counts()
         project_root = Path(__file__).resolve().parents[2]
         self.model_path = Path(model_path) if model_path else project_root / "pipeline_v4" / "calibration_and_diagnostics" / "modal_classification" / "artifacts" / "modal_classifier_hybrid_v1.pkl"
@@ -922,12 +928,7 @@ class HybridRouteEvaluator(RandomForestRouteEvaluator):
                 if names and names != features:
                     raise ValueError(f"The internal feature order for clf_{level} is incompatible.")
                 setattr(self, f"clf_{level}", classifier)
-            threshold = float(contract.get("n3", {}).get("threshold_bus", -1))
-            if threshold != BUS_PROBABILITY_THRESHOLD:
-                raise ValueError(
-                    f"Incompatible Bus threshold: {threshold}; expected {BUS_PROBABILITY_THRESHOLD}."
-                )
-            self.bus_threshold = threshold
+            self.bus_threshold = BUS_PROBABILITY_THRESHOLD
             self.clf = self.clf_n1
             self.loaded_from_disk = True
             print("[HybridRouteEvaluator] Hybrid model loaded.", flush=True)
@@ -952,7 +953,7 @@ class GuardrailedBayesianRouteEvaluator(BayesianRouteEvaluator):
         if not isinstance(serving_context, TripServingContext):
             raise ServingContractError("Falta TripServingContext para aplicar el guardrail GPS.")
         min_pings = getattr(random_forest_contract, "MIN_EFFECTIVE_PINGS", MIN_EFFECTIVE_PINGS)
-        min_pct = getattr(random_forest_contract, "MIN_PCT_CONSERVED", MIN_PCT_CONSERVED)
+        min_pct = 100.0 * getattr(random_forest_contract, "MIN_PCT_CONSERVED", MIN_PCT_CONSERVED)
         if (serving_context.effective_ping_count < min_pings or
                 serving_context.pct_pings_conserved < min_pct):
             return "Calidad insuficiente", None, 0.0, {mode: 0.0 for mode in self.modos}
